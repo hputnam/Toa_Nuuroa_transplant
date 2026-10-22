@@ -1,0 +1,72 @@
+---
+title: "sym_density"
+author: "HM Putnam"
+date: "2025-11-09"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+## install packages if you dont already have them
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("plotrix")) install.packages("plotrix")
+
+# load packages
+library(plotrix)
+library(tidyverse)
+
+```
+
+
+# Normalize to surface area
+```{r}
+
+# Load cell data
+sym <- read_csv("data/cells_data.csv")
+
+#calculate the average of two counts
+sym.mean <- sym %>%
+  group_by(colony_id)%>%
+  summarize(mean.cell.count = count.ul.1 * count.ul.2 / 2)
+
+write_csv(sym.mean, path = "output/cell_density_list.csv")
+
+# Load homogenate volume
+homog.vol <- read_csv("data/homogenate_vols.csv") %>%
+  select(colony_id, homog_vol_ml)
+sym.mean <- full_join(sym.mean, homog.vol)
+
+# Load surface area
+sa <- read_csv("output/surface_area_calculated.csv")
+sym.mean <- full_join(sym.mean, sa)
+
+# Multiply by the homogenate volume and divide by surface area
+sym.mean <- sym.mean %>%  
+  mutate(cells.cm2 = mean.cell.count * homog_vol_ml / surface.area.cm2)
+
+meta <- read_csv("data/Master_Sample_List.csv")
+sym.mean <- right_join(sym.mean, meta, by = "colony_id") 
+
+# write  data to file
+sym.mean %>%
+  select(colony_id, cells.cm2) %>%
+  write_csv(path = "output/cell_density.csv")
+```
+
+# Plot results by species and site
+```{r, eval = TRUE}
+
+# Plot data
+sym.mean %>%
+  ggplot(aes(x = as.factor(Date.Sampled.Tank), y = cells.cm2, color = species)) +
+  facet_wrap(~species, scales = "free") +
+  labs(x = "", y = "Sym Density (cells/cm2)") +
+  geom_jitter(width = 0.1) +                                            # Plot all points
+  stat_summary(fun.data = mean_cl_normal, fun.args = list(mult = 1),    # Plot standard error
+               geom = "errorbar", color = "black", width = 0.5) +
+  stat_summary(fun.y = mean, geom = "point", color = "black")           # Plot mean
+
+```

@@ -1,0 +1,624 @@
+---
+title: "Univariate analysis of heatwave time series biological data"
+author: "Ariana S Huffmyer, E5 RoL Team"
+edited by: "DM Becker-Polinski"
+date: "20220830"
+output: github_document
+editor_options: 
+  chunk_output_type: consoles
+--- 
+
+# Set Up    
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+## install packages if you dont already have them
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("lme4")) install.packages("lme4")
+if (!require("lmerTest")) install.packages("lmerTest")
+if (!require("car")) install.packages("car")
+if (!require("emmeans")) install.packages("emmeans")
+if (!require("multcomp")) install.packages("multcomp")
+if (!require("cowplot")) install.packages("cowplot")
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("grid")) install.packages("grid")
+if (!require("gridExtra")) install.packages("gridExtra")
+
+# load packages
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(car)
+library(emmeans)
+library(multcomp)
+library(cowplot)
+library(dplyr)
+library(grid)
+library(gridExtra)
+```
+
+# Load dataframe
+
+Load in master dataframe generated from 1_assemble_data.Rmd.  
+```{r}
+master<-read.csv("gametogenesis_timeseries/gametogenesis_timeseries_analysis/Output/master_timeseries.csv")
+
+# read in metadata to add patch to master timeseries
+metadata <- read.csv("gametogenesis_timeseries/gametogenesis_timeseries_analysis/master_metadata.csv")
+
+# add ACR- before each tag number
+metadata <- metadata %>%
+  mutate(colony_id = paste0("ACR-", colony_id))
+
+#commbine master and metadata
+master <- left_join(master, metadata)
+
+#rename AUG september and october
+
+master[master=="JANUARY"] <- "JAN"
+master[master=="FEBRUARY"] <- "FEB"
+master[master=="MARCH"] <- "MAR"
+master[master=="APRIL"] <- "APR"
+master[master=="MAY"] <- "MAY"
+master[master=="JUNE"] <- "JUN"
+master[master=="JULY"] <- "JUL"
+master[master=="AUGUST"] <- "AUG"
+master[master=="SEPTEMBER"] <- "SEP"
+master[master=="OCTOBER"] <- "OCT"
+
+
+```
+
+# Univariate Responses  
+
+Plot univariate response plots and then generate panel of all plots at the end of this section. Individual plots will not be displayed.  
+
+### Plot: Symbiont Densities
+ 
+View by treatment and timepoint.
+```{r}
+# Ensure timepoint is a factor
+master$timepoint <- factor(master$timepoint, levels = c("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"))
+
+# Fit a mixed-effects model with 'patch' as a random effect
+model.sym <- lmer(cells.cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.sym))
+
+
+# Check if patch or colony_id should be used as random effect, lower AIC with patch
+# Model with colony as a random effect
+model_with_colony <- lmer(cells.cm2 ~ timepoint + (1|patch), data = master)
+
+# Model without colony as a random effect
+model_without_colony <- lmer(cells.cm2 ~ timepoint + (1|colony_id), data = master)
+
+# run commparisons for AIC and BIC values
+AIC(model_with_colony, model_without_colony)
+BIC(model_with_colony, model_without_colony)
+
+# Residuals are not normally distributed. Attempt with log transformation.   
+sym_model<-lmer(log(cells.cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(sym_model))
+
+# Remove QQ-plot identified outliers by colony ID + timepoint
+data_clean_sym <- master |>
+  dplyr::filter(
+    !(colony_id == "ACR-416" & timepoint == "SEP"),
+    !(colony_id == "ACR-429" & timepoint == "FEB"),
+    !(colony_id == "ACR-415" & timepoint == "JUN"),
+    !(colony_id == "ACR-426" & timepoint == "SEP"),
+    !(colony_id == "ACR-436" & timepoint == "JUN"),
+    !(colony_id == "ACR-423" & timepoint == "AUG")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+# Fit the model with January as the intercept
+sym_model <- lmer(log(cells.cm2) ~ timepoint + (1 | patch), data = data_clean_sym)
+
+# Check residuals for normality
+qqPlot(residuals(sym_model))
+
+# Get the summary of the model
+summary(sym_model)
+
+# Perform Type III ANOVA
+anova_result_sym <- Anova(sym_model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.sym <- emmeans(sym_model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_cld_sym <- cld(pairwise_results.sym, Letters = letters)
+
+# Get the maximum value of cells.cm2
+max_cells_cm2 <- max(data_clean_sym$cells.cm2, na.rm = TRUE)
+
+# Create the plot
+symbplot_cm2 <- data_clean_sym |>
+  ggplot(aes(x = timepoint, y = cells.cm2, fill = timepoint)) +
+  geom_boxplot(color = "black", fill = "white", alpha = 0.2) +
+  geom_point(pch = 21, size = 2, position = position_jitterdodge(0.2)) +
+ # geom_text(data = timepoint_cld_sym, aes(label = .group, x = timepoint, y = 1 * max_cells_cm2), 
+    #        vjust = -0.5, hjust = 0.5, size = 14, color = "black") + # Add the text annotations with centered alignment for each timepoint
+  scale_x_discrete(limits = c("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+  xlab("") + 
+  ylab(expression(bold(paste("Symbiont Cells cm"^-2)))) +
+  theme_classic() + 
+  theme(
+    legend.position = "none",
+    axis.title = element_text(face = "bold", size = 60),
+    axis.text = element_text(size = 40, color = "black"),
+    strip.text.x = element_text(face = "italic", size = 40));symbplot_cm2
+
+```
+
+
+### Plot: CHL-a
+
+View by timepoint  
+```{r}
+
+# # Fit a mixed-effects model with 'patch' as a random effect, check normality
+# model.chla <- lmer(chla.ug.cm2 ~ timepoint + (1|patch), data = master)
+# qqPlot(residuals(model.chla))
+# 
+# # Residuals are not normally distributed. Attempt with log transformation.  
+# chla_model<-lmer(log(chla.ug.cm2)~timepoint+(1|patch), data=master)
+# qqPlot(residuals(chla_model))
+# 
+# # Identify the outliers
+# outliers <- c(94,308, 45, 346)
+# 
+# # remove outliers
+# data_clean_chla <- master[-outliers, ]
+# 
+# # Residuals are not normally distributed. Attempt with log transformation.  
+# chla_model<-lmer(log(chla.ug.cm2)~timepoint+(1|patch), data=data_clean_chla)
+# qqPlot(residuals(chla_model))
+# 
+# # Get the summary of the model
+# summary(chla_model)
+# 
+# # Perform Type III ANOVA
+# anova_result <- Anova(chla_model, type = 3)
+# 
+# # Post-hoc pairwise comparisons
+# pairwise_results.chla <- emmeans(chla_model, pairwise ~ timepoint, adjust = "tukey")
+# 
+# # Generate letters for significant differences
+# timepoint_cld_chla <- cld(pairwise_results.chla, Letters = letters)
+# 
+# # Define a threshold for identifying outliers for the 'Value' column
+# threshold <- 10  # For example, we consider values greater than 50 as outliers
+# 
+# # Filter out values beyond the threshold for the 'Value' column
+# filtered_chla <- master[master$chla.ug.cm2 <= threshold, ]
+# 
+# # Get the maximum value of cells.cm2
+# max_chla <- max(master$chla.ug.cm2, na.rm = TRUE)  # Make sure to handle any missing values
+# 
+# # make chla plot
+# chla_cm2 <- filtered_chla %>%
+#   filter(!is.na(chla.ug.cm2)) %>%
+#   filter(!is.na(timepoint))%>%
+#   dplyr::select(colony_id, timepoint, chla.ug.cm2)%>%
+#   
+#   ggplot(., aes(x = timepoint, y = chla.ug.cm2, fill = timepoint)) +
+#     geom_boxplot(color="black", fill="white", alpha=0.2) +
+#     geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+#     ylim(0, 12)+
+#  # geom_text(data = timepoint_cld_chla, aes(label = .group, x = timepoint, y = 1.0*max_chla), vjust = -0.5, size = 14, color = "black") +
+#   scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+#     xlab("") + 
+#     ylab(expression(bold(paste("Chlorophyll a (", mu, "g cm"^-2, ")"))))+
+#     theme_classic() + 
+#     scale_y_continuous(limits = c(0, 8))  + # Adjust limits as needed
+#     theme(legend.position = "none",
+#       axis.title=element_text(face="bold", size=60),
+#       axis.text=element_text(size=40, color="black"), 
+#       strip.text.x=element_text(face="italic", size=40)); chla_cm2
+
+```
+
+### Plot: CHL-c
+
+View by timepoint  
+```{r}
+# # Fit a mixed-effects model with 'patch' as a random effect
+# model.chlc <- lmer(chlc2.ug.cm2 ~ timepoint + (1|patch), data = master)
+# qqPlot(residuals(chlc_model))
+# 
+# # Get the summary of the model
+# summary(model.chlc)
+# 
+# # Perform Type III ANOVA
+# anova_result <- Anova(model.chlc, type = 3)
+# 
+# # Post-hoc pairwise comparisons
+# pairwise_results.chlc <- emmeans(chlc_model, pairwise ~ timepoint, adjust = "tukey")
+# 
+# # Generate letters for significant differences
+# timepoint_cld_chlc <- cld(pairwise_results.chlc, Letters = letters)
+# 
+# # Get the maximum value of cells.cm2
+# max_chlc <- max(master$chlc2.ug.cm2, na.rm = TRUE)  # Make sure to handle any missing values
+# 
+# # Make chlc plot
+# chlc_prot_cm2 <- master %>%
+#   filter(!is.na(chlc2.ug.cm2)) %>%
+#   filter(!is.na(timepoint))%>%
+#   dplyr::select(colony_id, timepoint, chlc2.ug.cm2)%>%
+#   
+#   ggplot(., aes(x = timepoint, y = chlc2.ug.cm2, fill = timepoint)) +
+#     geom_boxplot(color="black", fill="white", alpha=0.2) +
+#     geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+#     ylim(0, 12)+
+#    # geom_text(data = timepoint_cld_chlc, aes(label = .group, x = timepoint, y = 1.0*max_chlc), vjust = -0.5, size = 14, color = "black") +
+#   scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+#     xlab("") + 
+#     ylab(expression(bold(paste("Chlorophyll c2 (", mu, "g cm"^-2, ")"))))+
+#     theme_classic() + 
+#     scale_y_continuous(limits = c(0, 4.5))  + # Adjust limits as needed
+#     theme(legend.position = "none",
+#       axis.title=element_text(face="bold", size=60),
+#       axis.text=element_text(size=40, color="black"), 
+#       strip.text.x=element_text(face="italic", size=40)) ; chlc_prot_cm2
+# 
+
+```
+
+### Plot: total-chl
+
+View by timepoint  
+```{r}
+# Fit a mixed-effects model with 'patch' as a random effect
+model.totchl <- lmer(Total_Chl_cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.totchl))
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+totchl_model<-lmer(log(Total_Chl_cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(totchl_model))
+
+# Remove QQ-plot identified outliers by colony ID + timepoint
+data_clean_tot <- master |>
+  dplyr::filter(
+    !(colony_id == "ACR-429" & timepoint == "FEB"),
+    !(colony_id == "ACR-461" & timepoint == "MAY")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+totchl_model<-lmer(log(Total_Chl_cm2)~timepoint+(1|patch), data=data_clean_tot)
+qqPlot(residuals(totchl_model))
+
+# Get the summary of the model
+summary(totchl_model)
+
+# Perform Type III ANOVA
+anova_result_tot <- Anova(totchl_model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.tot <- emmeans(totchl_model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_cld_tot <- cld(pairwise_results.tot, Letters = letters)
+
+# Get the maximum value of Total_Chl_cm2
+max_tot <- max(data_clean_tot$Total_Chl_cm2, na.rm = TRUE)
+
+# Make total chlorophyll plot
+tot.chl <- data_clean_tot |>
+  dplyr::select(colony_id, timepoint, Total_Chl_cm2) |>
+  
+  ggplot(aes(x = timepoint, y = Total_Chl_cm2, fill = timepoint)) +
+    geom_boxplot(color="black", fill="white", alpha=0.2) +
+    geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+   #   geom_text(data = timepoint_cld_tot, aes(label = .group, x = timepoint, y = 1.0*max_tot), vjust = -0.5, size = 14, color = "black") +
+  scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+    xlab("") + 
+    ylab(expression(bold(paste("Total Chlorophyll (", mu, "g cm"^-2, ")"))))+
+    theme_classic() + 
+    scale_y_continuous(limits = c(0, 9))  + # Adjust limits as needed
+    theme(legend.position = "none",
+      axis.title=element_text(face="bold", size=60),
+      axis.text=element_text(size=40, color="black"), 
+      strip.text.x=element_text(face="italic", size=40)) ; tot.chl
+
+
+```
+
+### Plot: Sym biomass 
+
+View by timepoint  
+```{r}
+# Fit a mixed-effects model with 'patch' as a random effect
+model.sym.bio <- lmer(Sym_AFDW.mg.cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.sym.bio))
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+sym.bio.model<-lmer(log(Sym_AFDW.mg.cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(sym.bio.model))
+
+# Remove invalid and QQ-identified outlier observations by colony ID + timepoint
+data_clean_sym.bio <- master |>
+  dplyr::filter(
+    # Negative AFDW: traced to source data errors (see biomass data audit)
+    !(colony_id == "ACR-432" & timepoint == "MAR"),  # dry.pan < initial.pan: data entry error
+    !(colony_id == "ACR-417" & timepoint == "JUN"),  # moisture absorption artifact, tiny sample
+    !(colony_id == "ACR-451" & timepoint == "MAY"),  # burnt > dry by 1.1 mg: balance precision limit
+    # Additional QQ-plot identified outliers
+    !(colony_id == "ACR-424" & timepoint == "MAY"),
+    !(colony_id == "ACR-423" & timepoint == "MAY"),
+    !(colony_id == "ACR-447" & timepoint == "MAR"),
+    !(colony_id == "ACR-438" & timepoint == "APR")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+sym.bio.model<-lmer(log(Sym_AFDW.mg.cm2)~timepoint+(1|patch), data=data_clean_sym.bio)
+qqPlot(residuals(sym.bio.model))
+
+# Get the summary of the model
+summary(sym.bio.model)
+
+# Perform Type III ANOVA
+anova_result_sym_bio <- Anova(sym.bio.model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.sym.bio <- emmeans(sym.bio.model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_sym_bio <- cld(pairwise_results.sym.bio, Letters = letters)
+
+# Get the maximum value of Sym_AFDW
+max_sym_bio <- max(data_clean_sym.bio$Sym_AFDW.mg.cm2, na.rm = TRUE)
+
+# Make symbiont biomass plot
+sym_bio_cm2 <- data_clean_sym.bio |>
+  dplyr::select(colony_id, timepoint, Sym_AFDW.mg.cm2) |>
+  
+  ggplot(aes(x = timepoint, y = Sym_AFDW.mg.cm2, fill = timepoint)) +
+    geom_boxplot(color="black", fill="white", alpha=0.2) +
+    geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+    ylim(0, 2.5)+
+  #  geom_text(data = timepoint_host_bio, aes(label = .group, x = timepoint, y = 1.2*max_sym_bio), vjust = -0.5, size = 14, color = "black") +
+  scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+    xlab("") +
+    ylab(expression(bold(paste("Symbiont Biomass (mg cm"^-2, ")"))))+
+    theme_classic() + 
+    theme(legend.position = "none",
+      axis.title=element_text(face="bold", size=60),
+      axis.text=element_text(size=40, color="black"), 
+      strip.text.x=element_text(face="italic", size=40)); sym_bio_cm2
+
+
+```
+
+
+### Plot: Host Protein   
+
+View by timepoint   
+```{r}
+# Fit a mixed-effects model with 'patch' as a random effect
+model.host.prot <- lmer(host_prot_mg.cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.host.prot))
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+host.prot.model<-lmer(log(host_prot_mg.cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(host.prot.model))
+
+# Remove QQ-plot identified outliers by colony ID + timepoint
+data_clean_host_prot <- master |>
+  dplyr::filter(
+    !(colony_id == "ACR-447" & timepoint == "MAR"),
+    !(colony_id == "ACR-426" & timepoint == "AUG"),
+    !(colony_id == "ACR-420" & timepoint == "AUG"),
+    !(colony_id == "ACR-451" & timepoint == "JAN")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+host.prot.model<-lmer(log(host_prot_mg.cm2)~timepoint+(1|patch), data=data_clean_host_prot)
+qqPlot(residuals(host.prot.model))
+
+# Get the summary of the model
+summary(host.prot.model)
+
+# Perform Type III ANOVA
+anova_result_host_prot <- Anova(host.prot.model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.host.prot <- emmeans(host.prot.model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_host_prot <- cld(pairwise_results.host.prot, Letters = letters)
+
+# Get the maximum value of host_prot
+max_host_prot <- max(data_clean_host_prot$host_prot_mg.cm2, na.rm = TRUE)
+
+# Make host protein plot
+host_prot_cm2 <- data_clean_host_prot |>
+  dplyr::select(colony_id, timepoint, host_prot_mg.cm2) |>
+  
+  ggplot(aes(x = timepoint, y = host_prot_mg.cm2, fill = timepoint)) +
+    geom_boxplot(color="black", fill="white", alpha=0.2) +
+    geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) + 
+      #  geom_text(data = timepoint_host_prot, aes(label = .group, x = timepoint, y = 1.0*max_host_prot), vjust = -0.5, size = 14, color = "black") +
+  scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+    xlab("") + 
+    ylab(expression(bold(paste("Host Protein ( mg cm"^-2, ")"))))+
+    theme_classic() + 
+    scale_y_continuous(limits = c(0, 2.5))  + # Adjust limits as needed
+    theme(legend.position = "none",
+      axis.title=element_text(face="bold", size=60),
+      axis.text=element_text(size=40, color="black"), 
+      strip.text.x=element_text(face="italic", size=40)); host_prot_cm2
+
+
+```
+
+
+### Plot: Holobiont protein  
+
+View by timepoint  
+```{r}
+# Fit a mixed-effects model with 'patch' as a random effect
+model.holo.prot <- lmer(holobiont_prot_mg.cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.holo.prot))
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+holo.prot.model<-lmer(log(holobiont_prot_mg.cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(holo.prot.model))
+
+# Remove QQ-plot identified outliers by colony ID + timepoint
+data_clean_holo_prot <- master |>
+  dplyr::filter(
+    !(colony_id == "ACR-433" & timepoint == "APR"),
+    !(colony_id == "ACR-414" & timepoint == "APR"),
+    !(colony_id == "ACR-447" & timepoint == "MAR"),
+    !(colony_id == "ACR-421" & timepoint == "APR"),
+    !(colony_id == "ACR-420" & timepoint == "APR"),
+    !(colony_id == "ACR-423" & timepoint == "JUN")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+holo.prot.model<-lmer(log(holobiont_prot_mg.cm2)~timepoint+(1|patch), data=data_clean_holo_prot)
+qqPlot(residuals(holo.prot.model))
+
+# Get the summary of the model
+summary(holo.prot.model)
+
+# Perform Type III ANOVA
+anova_result_holo_prot <- Anova(holo.prot.model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.holo.prot <- emmeans(holo.prot.model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_holo_prot <- cld(pairwise_results.holo.prot, Letters = letters)
+
+# Get the maximum value of holobiont_prot
+max_holo_prot <- max(data_clean_holo_prot$holobiont_prot_mg.cm2, na.rm = TRUE)
+
+# Make holobiont protein plot
+holobiont_prot_cm2 <- data_clean_holo_prot |>
+  dplyr::select(colony_id, timepoint, holobiont_prot_mg.cm2) |>
+  
+  ggplot(aes(x = timepoint, y = holobiont_prot_mg.cm2, fill = timepoint)) +
+    geom_boxplot(color="black", fill="white", alpha=0.2) +
+    geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+    ylim(0, 3.5)+
+       #   geom_text(data = timepoint_holo_prot, aes(label = .group, x = timepoint, y = 1.0*max_holo_prot), vjust = -0.5, size = 14, color = "black") +
+  scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+    xlab("") +
+    ylab(expression(bold(paste("Holobiont Protein (mg cm"^-2, ")"))))+
+    theme_classic() + 
+    theme(legend.position = "none",
+      axis.title=element_text(face="bold", size=60),
+      axis.text=element_text(size=40, color="black"), 
+      strip.text.x=element_text(face="italic", size=40)); holobiont_prot_cm2
+
+
+
+```
+
+
+### Plot: Host biomass 
+
+View by timepoint  
+```{r}
+# Fit a mixed-effects model with 'patch' as a random effect
+model.host.bio <- lmer(Host_AFDW.mg.cm2 ~ timepoint + (1|patch), data = master)
+qqPlot(residuals(model.host.bio))
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+host.bio.model<-lmer(log(Host_AFDW.mg.cm2)~timepoint+(1|patch), data=master)
+qqPlot(residuals(host.bio.model))
+
+# Remove QQ-plot identified outliers by colony ID + timepoint
+data_clean_host.bio <- master |>
+  dplyr::filter(
+    !(colony_id == "ACR-437" & timepoint == "MAY"),
+    !(colony_id == "ACR-435" & timepoint == "MAY"),
+    !(colony_id == "ACR-420" & timepoint == "APR"),
+    !(colony_id == "ACR-464" & timepoint == "MAR"),
+    !(colony_id == "ACR-423" & timepoint == "APR")
+  )
+
+# Residuals are not normally distributed. Attempt with log transformation.  
+host.bio.model<-lmer(log(Host_AFDW.mg.cm2)~timepoint+(1|patch), data=data_clean_host.bio)
+qqPlot(residuals(host.bio.model))
+
+# Get the summary of the model
+summary(host.bio.model)
+
+# Perform Type III ANOVA
+anova_result_host_bio <- Anova(host.bio.model, type = 3)
+
+# Post-hoc pairwise comparisons
+pairwise_results.host.bio <- emmeans(host.bio.model, pairwise ~ timepoint, adjust = "tukey")
+
+# Generate letters for significant differences
+timepoint_host_bio <- cld(pairwise_results.host.bio, Letters = letters)
+
+# Get the maximum value of Host_AFDW
+max_host_bio <- max(data_clean_host.bio$Host_AFDW.mg.cm2, na.rm = TRUE)
+
+# Make host biomass plot
+host_bio_cm2 <- data_clean_host.bio |>
+  dplyr::select(colony_id, timepoint, Host_AFDW.mg.cm2) |>
+  
+  ggplot(aes(x = timepoint, y = Host_AFDW.mg.cm2, fill = timepoint)) +
+    geom_boxplot(color="black", fill="white", alpha=0.2) +
+    geom_point(pch = 21, size=2, position = position_jitterdodge(0.2)) +
+    ylim(0, 5)+
+   # geom_text(data = timepoint_host_bio, aes(label = .group, x = timepoint, y = 1.0*max_host_bio), vjust = -0.5, size = 14, color = "black") +
+  scale_x_discrete(limits = c("JAN","FEB","MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT")) +
+    xlab("") +
+    ylab(expression(bold(paste("Host Biomass (mg cm"^-2, ")"))))+
+    theme_classic() + 
+    theme(legend.position = "none",
+      axis.title=element_text(face="bold", size=60),
+      axis.text=element_text(size=40, color="black"), 
+      strip.text.x=element_text(face="italic", size=40)); host_bio_cm2
+
+
+```
+
+Join all plots for each normalization together.  
+```{r}
+phys_sym_figure<- plot_grid(symbplot_cm2, sym_bio_cm2, tot.chl, ncol=3, nrow=1, labels = c('A', 'B', 'C'),label_size = 80,rel_heights= 1, rel_widths = 1, label_y=1, align="h") 
+
+#add x label to plot_GRID
+x.grob <- textGrob("TIMEPOINT", 
+                   gp=gpar(fontface="bold", col="black", fontsize=50))
+
+#add to plot
+phys_sym_figure <- grid.arrange(arrangeGrob(phys_sym_figure, bottom = x.grob))
+
+ggsave(filename="gametogenesis_timeseries/gametogenesis_timeseries_analysis/Figures/Phys_Sym_Figure.png", plot=phys_sym_figure, dpi=300, width=49, height=20, units="in")
+
+phys_host_figure<-plot_grid(host_prot_cm2, host_bio_cm2, ncol=2, nrow=1, labels = c('A', 'B'),label_size = 80,rel_heights= 1, rel_widths = 1, label_y=1, align="h")
+
+#add x label to plot_GRID
+x.grob <- textGrob("TIMEPOINT", 
+                   gp=gpar(fontface="bold", col="black", fontsize=50))
+
+#add to plot
+phys_host_figure <- grid.arrange(arrangeGrob(phys_host_figure, bottom = x.grob))
+
+ggsave(filename="gametogenesis_timeseries/gametogenesis_timeseries_analysis/Figures/Phys_Host_Figure.png", plot=phys_host_figure, dpi=300, width=45, height=20, units="in")
+
+#make plot of all 
+phys_all_figure<-plot_grid(symbplot_cm2, sym_bio_cm2, tot.chl, host_prot_cm2, holobiont_prot_cm2, host_bio_cm2, ncol=2, nrow=3, labels = c('A', 'B', 'C', 'D', 'E', 'F'),label_size = 80,rel_heights= 1, rel_widths = 1, label_y=1, align="h")
+
+#add x label to plot_GRID
+x.grob <- textGrob("TIMEPOINT", 
+                   gp=gpar(fontface="bold", col="black", fontsize=50))
+
+#add to plot
+phys_all_figure <- grid.arrange(arrangeGrob(phys_all_figure, bottom = x.grob))
+
+ggsave(filename="gametogenesis_timeseries/gametogenesis_timeseries_analysis/Figures/Phys_all_Figure.png", plot=phys_all_figure, dpi=300, width=40, height=48, units="in")
+ggsave(filename="gametogenesis_timeseries/gametogenesis_timeseries_analysis/Figures/Phys_all_Figure.png", plot=phys_all_figure, dpi=300, width=40, height=48, units="in")
+
+```

@@ -1,0 +1,25 @@
+{
+    "id": "717CBEB2",
+    "path": "~/MyProjects/Toa_Nuuroa_transplant/RAnalysis/scripts/surface_area.Rmd",
+    "project_path": "scripts/surface_area.Rmd",
+    "type": "r_markdown",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1792607651092.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "chunk_output_type": "console",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1762671084,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1762671084,
+    "read_only": false,
+    "read_only_alternatives": []
+}

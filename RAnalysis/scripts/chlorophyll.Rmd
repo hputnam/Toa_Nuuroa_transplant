@@ -59,7 +59,7 @@ df <- df %>%
 # get the acetone blank 750 absorbance for each file (i.e., plate), and subtract from 630 and 663 values for each sample
 df <- df %>%
   group_by(file) %>%
-  mutate(blank750 = `750`[colony_id == "BK"]) %>%
+  mutate(blank750 = `750`[colony_id == "BLANK"]) %>%
   ungroup() %>%
   mutate(adj630 = `630` - blank750,
          adj663 = `663` - blank750)

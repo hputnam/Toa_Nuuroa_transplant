@@ -17,7 +17,7 @@ if (!require("tidyverse")) install.packages("tidyverse")
 library(tidyverse)
 ```
 
-#use wooden dowel standards to calculate surface area curve 
+#use wooden shape standards to calculate surface area curve 
 ```{r}
 
 #load wax data
@@ -60,8 +60,27 @@ boxplot(smpls$surface.area.cm2)
 hist(smpls$surface.area.cm2)
 range(stnds$surface.area.cm2)
 
+# Join original_id from sample info and write output with both IDs
+sample_info <- read_csv("data/sample_info_colony_id.csv") %>%
+  select(original_id, colony_id)
+
+
+smpls <- smpls %>%
+  left_join(sample_info, by = "original_id") %>%
+  select(original_id, colony_id, surface.area.cm2) 
+
+# Check for duplicate colony ids in samples
+dupes <- smpls %>% filter(duplicated(colony_id))
+if (nrow(dupes) > 0) {
+  warning(nrow(dupes), " duplicate colony_id(s) found in sample_info:")
+  print(dupes)
+} else {
+  cat("No duplicate colony_id found in sample_info.\n")
+}
+
 smpls %>%
-  select(colony_id, surface.area.cm2)%>%
-    write_csv("output/surface_area_calculated.csv")
+  write_csv("output/surface_area_calculated.csv")
+
+
 
 ```

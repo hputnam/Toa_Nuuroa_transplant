@@ -1,0 +1,264 @@
+---
+title: "Protein analysis"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+## install packages if you dont already have them
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("broom")) install.packages("broom")
+
+# load packages
+library(tidyverse)
+library(broom)
+```
+
+# Import data
+```{r}
+# Helper: read wide-format Gen5 plate reader CSV and return tidy well × absorbance data
+read_prot_plate <- function(filepath) {
+  raw <- read_csv(filepath, skip = 25, col_names = FALSE, show_col_types = FALSE)
+  col_nums <- unlist(raw[1, 3:14])           # plate column numbers 1–12 from header row
+  raw %>%
+    slice(-1) %>%                            # drop header row
+    select(2:14) %>%                         # row letter + 12 data columns
+    set_names(c("row", col_nums)) %>%
+    pivot_longer(-row, names_to = "col_num", values_to = "abs562") %>%
+    mutate(well   = paste0(row, col_num),
+           abs562 = as.numeric(abs562)) %>%
+    select(well, `562:562` = abs562)
+}
+
+# List protein data files
+prot_path = "data/protein/"                                              # Path to prot data directory
+all_prot_files <- list.files(path = prot_path, pattern = "*.csv")          # List all files in directory
+prot_platemaps <- list.files(path = prot_path, pattern = "platemap")       # List platemap files
+prot_data_files <- setdiff(all_prot_files, prot_platemaps)                 # List data files
+
+# Read in all files into tibble
+df <- tibble(file = prot_data_files) %>%
+  mutate(plate = str_remove(file, "_prot\\.csv")) %>%          # e.g., "20261021_Plate1_Host"
+  separate(plate, into = c("date", "plate_num", "fraction"),
+           sep = "_", remove = FALSE) %>%
+  mutate(platemap = map(plate, ~read_csv(paste0(prot_path, ., "_prot_platemap.csv")) %>%
+                          mutate(colony_id = str_trim(colony_id))),  # trim whitespace from colony_id
+         prot_data = map(file, ~read_prot_plate(paste0(prot_path, .))))
+
+# Merge platemap and data for each plate
+df <- df %>%
+  mutate(merged = map2(platemap, prot_data, ~ right_join(.x, .y)))
+```
+
+# Plot standard curve
+```{r}
+# Create standard curve following kit instructions
+standards <- tribble(
+  ~std, ~BSA_ug.mL,
+  "A",        2000,
+  "B",        1500,
+  "C",        1000,
+  "D",         750,
+  "E",         500,
+  "F",         250,
+  "G",         125,
+  "H",          25,
+  "I",           0
+)
+
+# Pool all standard wells across plates for each date
+std_curve <- df %>%
+  unnest(merged) %>%
+  filter(grepl("Standard", colony_id)) %>%
+  select(date, plate, well, colony_id, abs562 = `562:562`) %>%
+  rename(std = colony_id) %>%
+  mutate(std = str_sub(std, 9, 9)) %>%
+  #group_by(std) %>%
+  #summarise(abs562 = mean(abs562)) %>%                       # calculate mean of standard duplicates
+  #mutate(abs562.adj = abs562 - abs562[std == "I"]) %>%       # subtract blank absorbace value from all
+  left_join(standards)
+
+## Fit one nonlinear model per date using all standards from that date
+std_models <- std_curve %>%
+  group_by(date) %>%
+  nest() %>%
+  mutate(
+    mod = map(data, function(d) {
+      # Derive starting values from data: solve z + a*exp(b*lo) = 0, z + a*exp(b*hi) = max(BSA)
+      b0 <- 1
+      lo  <- min(d$abs562); hi <- max(d$abs562)
+      a0  <- max(d$BSA_ug.mL) / (exp(b0 * hi) - exp(b0 * lo))
+      z0  <- -a0 * exp(b0 * lo)
+      nls(BSA_ug.mL ~ z + a * exp(b * abs562),
+          start = list(z = z0, a = a0, b = b0), data = d)
+    }),
+    fitted = map(mod, broom::augment),
+    label  = map2_chr(mod, data, ~{
+      cf <- coef(.x)
+      r2 <- 1 - sum(residuals(.x)^2) / sum((.y$BSA_ug.mL - mean(.y$BSA_ug.mL))^2)
+      sprintf("BSA = %.0f + %.0f \u00d7 exp(%.2f \u00d7 Abs)\nR\u00b2 = %.4f",
+              cf["z"], cf["a"], cf["b"], r2)
+    })
+  )
+
+# Plot standard curve
+std_curve_plot <- std_curve %>%
+  ggplot(aes(x = abs562, y = BSA_ug.mL, color = date)) +
+  geom_point(size = 3)
+
+Stnd <- std_curve_plot +
+  geom_line(data = std_models %>% unnest(fitted),
+            aes(x = abs562, y = .fitted, color = date)) +
+  geom_label(data = std_models,
+             aes(x = -Inf, y = Inf, label = label, color = date),
+             hjust = -0.05, vjust = 1.1, size = 3,
+             inherit.aes = FALSE, show.legend = FALSE) +
+  labs(title = "Standard curve")
+Stnd
+```
+
+# Calculate protein concentrations
+```{r}
+# Calculate protein concentration for all samples using the date-matched standard curve
+prot <- df %>%
+  unnest(merged) %>%
+  filter(!grepl("Standard", colony_id)) %>%                     # Get just samples (not standards)
+  select(date, plate, well, colony_id, abs562 = `562:562`) %>%  # Select only needed columns
+  filter(!is.na(colony_id)) %>%                                 # Filter out empty wells
+  filter(colony_id != "BLANK") %>%                              # Filter out blank wells
+  left_join(std_models %>% select(date, mod), by = "date") %>%  # Join date-matched model
+  mutate(prot_ug.mL = map2_dbl(abs562, mod,                     # Predict using date's model
+                                ~predict(.y, newdata = data.frame(abs562 = .x)))) %>%
+  select(-mod)                                                  # Drop model column
+
+std_curve_plot + 
+  geom_point(data = prot, aes(x = abs562, y = prot_ug.mL), pch = "X", cex = 5, alpha = 0.3) +
+  labs(title = "All samples projected on standard curve")
+```
+
+# Outlier check
+```{r}
+# Absorbance bounds from the standard curve for each date
+std_range <- std_curve %>%
+  group_by(date) %>%
+  summarise(abs_lo = min(abs562), abs_hi = max(abs562))
+
+# Flag: (1) absorbance outside standard curve range, (2) within-plate duplicate CV > 30%
+prot_outliers <- prot %>%
+  left_join(std_range, by = "date") %>%
+  group_by(colony_id, plate) %>%
+  mutate(CV = sd(abs562) / mean(abs562) * 100) %>%
+  ungroup() %>%
+  mutate(flag_range = abs562 < abs_lo | abs562 > abs_hi,
+         flag_cv    = CV > 30)
+
+# Print any flagged samples
+prot_outliers %>%
+  filter(flag_range | flag_cv) %>%
+  select(date, plate, colony_id, well, abs562, prot_ug.mL, CV, flag_range, flag_cv) %>%
+  arrange(colony_id) %>%
+  print(n = Inf)
+
+# Plot absorbance per sample; red = flagged
+prot_outliers %>%
+  ggplot(aes(x = reorder(colony_id, abs562), y = abs562, color = flag_range | flag_cv)) +
+  geom_point(size = 2) +
+  geom_hline(aes(yintercept = abs_lo), linetype = "dashed", color = "gray50") +
+  geom_hline(aes(yintercept = abs_hi), linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"),
+                     labels = c("OK", "Flagged"), name = NULL) +
+  labs(x = "Sample", y = "Absorbance (562 nm)", title = "Outlier check") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# Remove outliers
+```{r}
+# Colony+plate groups flagged for high CV (both replicates removed)
+high_cv_groups <- prot_outliers %>%
+  filter(flag_cv) %>%
+  distinct(colony_id, plate)
+
+# Full list of removed wells with reason
+removed_samples <- prot_outliers %>%
+  filter(flag_range | flag_cv) %>%
+  mutate(reason = case_when(
+    flag_range & flag_cv ~ "out of range; high CV",
+    flag_range           ~ "out of range",
+    flag_cv              ~ "high CV (>30%)"
+  )) %>%
+  select(date, plate, colony_id, well, abs562, prot_ug.mL, CV, reason)
+
+print(removed_samples)
+write_csv(removed_samples, "output/protein_removed_samples.csv")
+
+# Remove out-of-range individual wells and entire high-CV groups
+prot <- prot_outliers %>%
+  filter(!flag_range) %>%
+  anti_join(high_cv_groups, by = c("colony_id", "plate")) %>%
+  select(-abs_lo, -abs_hi, -CV, -flag_range, -flag_cv)
+```
+
+# Calculate mean of technical duplicates and Normalize to surface area
+```{r}
+
+#Calculate mean of duplicates
+prot.mean <- prot %>% 
+  group_by(colony_id) %>%
+  summarise(prot_ug.mL = mean(prot_ug.mL, na.rm = T))
+
+
+# Surface area data
+sa <- read.csv("output/surface_area_calculated.csv")
+
+# Tissue homogenate volume data
+homog_vols <- read.csv("data/homogenate_vols.csv") 
+
+# Coral sample metadata
+metadata <- read.csv("data/sample_info_colony_id.csv") 
+
+# Join homogenate volumes and surface area with sample metadata
+metadata <- full_join(metadata, homog_vols) %>%
+  full_join(sa)
+
+# Join prot data with metadata
+prot.calc <- left_join(prot.mean, metadata, by="colony_id") %>%
+  mutate(prot_ug = prot_ug.mL * homog_vol_ml,
+         prot_ug.cm2 = prot_ug / surface.area.cm2,
+         prot_mg.cm2 = prot_ug.cm2 / 1000)
+```
+
+#plot by site and timepoint
+```{r}
+library(ggplot2)
+
+prot.calc |>
+  ggplot(aes(x = monitoring, y = prot_mg.cm2, color = site, group = site)) +
+  stat_summary(fun = mean, geom = "line") +
+  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
+  labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
+  theme_bw()
+
+prot.calc |>
+  ggplot(aes(x = monitoring, y = prot_mg.cm2, color = coral, group = interaction(coral, site))) +
+  stat_summary(fun = mean, geom = "line") +
+  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
+  labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
+  theme_bw()
+
+```
+
+
+# Write data to output file
+```{r}
+# Write protein data to output file
+prot.calc %>%
+  select(colony_id, prot_ug, prot_mg.cm2) %>%
+  write_csv(., file = "output/protein_calcs.csv")
+```
+

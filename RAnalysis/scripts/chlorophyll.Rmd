@@ -108,52 +108,28 @@ write_csv(df, path = "output/chlorophyll_list.csv")
 
 # Normalize to surface area
 ```{r}
-# Load homogenate volume
-homog.vol <- read_csv("data/homogenate_vols.csv") %>%
-  select(colony_id, homog_vol_ml)
 
-# Check for missing values
-homog.vol %>% filter(is.na(homog_vol_ml))
+#Calculate mean of duplicates
+chl.mean <- df %>% 
+  group_by(colony_id) %>%
+  summarise(chla.ug.ml = mean(chla.ug.ml, na.rm = T),
+            chlc2.ug.ml = mean(chlc2.ug.ml, na.rm = T))
 
-# Distribution
-summary(homog.vol$homog_vol_ml)
-ggplot(homog.vol, aes(x = homog_vol_ml)) +
-  geom_histogram(bins = 30) +
-  geom_rug()
+# Surface area data
+sa <- read.csv("output/surface_area_calculated.csv")
 
-# Flag outliers by IQR
-homog_iqr_fence <- quantile(homog.vol$homog_vol_ml, 0.75, na.rm = TRUE) +
-  1.5 * IQR(homog.vol$homog_vol_ml, na.rm = TRUE)
-homog.vol %>% filter(homog_vol_ml > homog_iqr_fence) %>% arrange(desc(homog_vol_ml))
+# Tissue homogenate volume data
+homog_vols <- read.csv("data/homogenate_vols.csv") 
 
-homog.dups <- homog.vol %>% count(colony_id) %>% filter(n > 1)
-homog.vol <- homog.vol %>% filter(!colony_id %in% homog.dups$colony_id)
-homog.vol %>% count(colony_id) %>% filter(n > 1)
+# Coral sample metadata
+metadata <- read.csv("data/sample_info_colony_id.csv") 
 
-chl <- full_join(df, homog.vol)
+# Join homogenate volumes and surface area with sample metadata
+metadata <- full_join(metadata, homog_vols) %>%
+  full_join(sa)
 
-# Load surface area
-sa <- read_csv("output/surface_area_calculated.csv")
-
-# Check for missing values
-sa %>% filter(is.na(surface.area.cm2))
-
-sa.dups <- sa %>% count(colony_id) %>% filter(n > 1)
-sa <- sa %>% filter(!colony_id %in% sa.dups$colony_id)
-sa %>% count(colony_id) %>% filter(n > 1)
-
-# Distribution
-summary(sa$surface.area.cm2)
-ggplot(sa, aes(x = surface.area.cm2)) +
-  geom_histogram(bins = 30) +
-  geom_rug()
-
-# Flag outliers by IQR
-sa_iqr_fence <- quantile(sa$surface.area.cm2, 0.75, na.rm = TRUE) +
-  1.5 * IQR(sa$surface.area.cm2, na.rm = TRUE)
-sa %>% filter(surface.area.cm2 > sa_iqr_fence) %>% arrange(desc(surface.area.cm2))
-
-chl <- full_join(chl, sa)
+# Join prot data with metadata
+chl.calc <- left_join(chl.mean, metadata, by="colony_id") 
 
 # Extraction volumes — 0.5 mL homogenate subsampled and extracted into 1.0 mL acetone
 homog_sample_vol_ml <- 0.5
@@ -162,128 +138,39 @@ acetone_vol_ml      <- 1.0
 # Scale: chl (µg/mL acetone) × acetone vol → total chl in subsample
 #        ÷ homog subsample vol × homog vol  → total chl in full homogenate
 #        ÷ surface area                     → µg/cm²
-chl <- chl %>%
+chl <- chl.calc %>%
   mutate(chla.ug.cm2  = chla.ug.ml  * (acetone_vol_ml / homog_sample_vol_ml) * homog_vol_ml / surface.area.cm2,
          chlc2.ug.cm2 = chlc2.ug.ml * (acetone_vol_ml / homog_sample_vol_ml) * homog_vol_ml / surface.area.cm2)
 
 # remove blanks and NAs
-chl <- filter(chl, !colony_id %in% c("NA", "BK"))
+chl <- filter(chl, !colony_id %in% c("NA", "BLANK"))
 
 # write chlorophyll data to file
 chl %>%
   select(colony_id, chla.ug.cm2, chlc2.ug.cm2) %>%
-  #mutate(timepoint="timepoint1")%>%
   filter(!is.na(chla.ug.cm2))%>%
   filter(!is.na(chlc2.ug.cm2))%>%
   write_csv(path = "output/chlorophyll.csv")
 ```
 
-# Plot results by species and site
-```{r, eval = TRUE}
-# Join with sample metadata
-meta <- read_csv("data/Master_Sample_List.csv")
-meta <- meta %>%
-  filter(Replicate!="t0")%>%
-  filter(Date.Sampled.Tank!="NA")
-
-chl <- right_join(chl, meta, by = "colony_id")
-
-# Plot chlorophyll a
-chl %>%
-  ggplot(aes(x = as.factor(Date.Sampled.Tank), y = chla.ug.cm2, color = species)) +
-  facet_wrap(~species, scales="free") +
-  labs(x = "", y = "chlorophyll a (µg/cm2)") +
-  geom_jitter(width = 0.1) +                                            # Plot all points
-  stat_summary(fun.data = mean_cl_normal, fun.args = list(mult = 1),    # Plot standard error
-               geom = "errorbar", color = "black", width = 0.5) +
-  stat_summary(fun.y = mean, geom = "point", color = "black") +          # Plot mean
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-# Plot chlorophyll c2
-chl %>%
-  ggplot(aes(x = as.factor(Date.Sampled.Tank), y = chlc2.ug.cm2, color = species)) +
-  facet_wrap(~species, scales="free") +
-  labs(x = "", y = "chlorophyll c2 (µg/cm2)") +
-  geom_jitter(width = 0.1) +                                            # Plot all points
-  stat_summary(fun.data = mean_cl_normal, fun.args = list(mult = 1),    # Plot standard error
-               geom = "errorbar", color = "black", width = 0.5) +
-  stat_summary(fun.y = mean, geom = "point", color = "black") +          # Plot mean
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-```
-
-
-#outlier check
-#check for outliers per species and diagnose if they are outliers in homogenate volume, surface area, or chlorophyll value
+#plot by site and timepoint
 ```{r}
-# Flag outliers per species using 1.5x IQR rule for each component variable
-is_outlier <- function(x) {
-  q <- quantile(x, c(0.25, 0.75), na.rm = TRUE)
-  iqr <- q[2] - q[1]
-  x < (q[1] - 1.5 * iqr) | x > (q[2] + 1.5 * iqr)
-}
+chl |>
+  ggplot(aes(x = monitoring, y = chla.ug.cm2, color = site, group = site)) +
+  stat_summary(fun = mean, geom = "line") +
+  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
+  labs(x = "Timepoint", y = expression("Chl-a (µg cm"^-2*")"), color = "Site") +
+  theme_bw()
 
-outlier_check <- chl %>%
-  group_by(species) %>%
-  mutate(
-    out_chla_raw     = is_outlier(chla.ug.ml),
-    out_chlc2_raw    = is_outlier(chlc2.ug.ml),
-    out_homog_vol    = is_outlier(homog_vol_ml),
-    out_surface_area = is_outlier(surface.area.cm2),
-    out_chla_norm    = is_outlier(chla.ug.cm2),
-    out_chlc2_norm   = is_outlier(chlc2.ug.cm2)
-  ) %>%
-  ungroup()
+chl |>
+  ggplot(aes(x = monitoring, y = chlc2.ug.cm2, color = site, group = site)) +
+  stat_summary(fun = mean, geom = "line") +
+  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
+  labs(x = "Timepoint", y = expression("Chl-c2 (µg cm"^-2*")"), color = "Site") +
+  theme_bw()
 
-# Samples flagged as outliers in any variable
-flagged <- outlier_check %>%
-  filter(out_chla_raw | out_chlc2_raw |
-           out_chla_norm | out_chlc2_norm) %>%
-  select(colony_id, species,
-         chla.ug.ml, chlc2.ug.ml,
-         chla.ug.cm2, chlc2.ug.cm2,
-         out_chla_raw, out_chlc2_raw,
-         out_chla_norm, out_chlc2_norm) %>%
-  arrange(species, colony_id)
 
-print(flagged)
-
-# Summary: count of outlier flags per species and variable
-outlier_check %>%
-  group_by(species) %>%
-  summarise(
-    n_total          = n(),
-    n_out_chla_raw   = sum(out_chla_raw,     na.rm = TRUE),
-    n_out_chlc2_raw  = sum(out_chlc2_raw,    na.rm = TRUE),
-    n_out_chla_norm  = sum(out_chla_norm,    na.rm = TRUE),
-    n_out_chlc2_norm = sum(out_chlc2_norm,   na.rm = TRUE)
-  )
-```
-
-```{r}
-# Remove samples flagged as extreme high outliers in raw chlorophyll values
-chl_clean <- outlier_check %>%
-  filter(!(out_chla_raw))
-
-# Plot chlorophyll a after outlier removal
-chl_clean %>%
-  ggplot(aes(x = as.factor(Date.Sampled.Tank), y = chla.ug.cm2, color = species)) +
-  facet_wrap(~species, scales = "free") +
-  labs(x = "", y = "chlorophyll a (µg/cm2)", title = "Chlorophyll a — outliers removed") +
-  geom_jitter(width = 0.1) +
-  stat_summary(fun.data = mean_cl_normal, fun.args = list(mult = 1),
-               geom = "errorbar", color = "black", width = 0.5) +
-  stat_summary(fun.y = mean, geom = "point", color = "black") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-
-# Plot chlorophyll c2 after outlier removal
-chl_clean %>%
-  ggplot(aes(x = as.factor(Date.Sampled.Tank), y = chlc2.ug.cm2, color = species)) +
-  facet_wrap(~species, scales = "free") +
-  labs(x = "", y = "chlorophyll c2 (µg/cm2)", title = "Chlorophyll c2 — outliers removed") +
-  geom_jitter(width = 0.1) +
-  stat_summary(fun.data = mean_cl_normal, fun.args = list(mult = 1),
-               geom = "errorbar", color = "black", width = 0.5) +
-  stat_summary(fun.y = mean, geom = "point", color = "black") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
 

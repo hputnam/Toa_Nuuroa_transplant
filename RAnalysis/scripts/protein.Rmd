@@ -173,7 +173,8 @@ prot <- df %>%
   select(-mod)                                                  # Drop model column
 
 std_curve_plot + 
-  geom_point(data = prot, aes(x = abs562, y = prot_ug.mL), pch = "X", cex = 5, alpha = 0.3) +
+  geom_point(data = prot, aes(x = abs562, y = prot_ug.mL, color = fraction), pch = "X", cex = 5, alpha = 0.3) +
+  scale_color_manual(values = c("Host" = "coral", "Sym" = "green")) +
   labs(title = "All samples projected on standard curve")
 ```
 
@@ -182,7 +183,13 @@ std_curve_plot +
 # Absorbance bounds from the standard curve for each date
 std_range <- std_curve %>%
   group_by(date) %>%
-  summarise(abs_lo = min(abs562), abs_hi = max(abs562))
+  summarise(abs_hi = max(abs562), .groups = "drop") %>%
+  left_join(
+    lm_models %>%
+      mutate(abs_lo = map_dbl(mod, ~-coef(.x)[["(Intercept)"]] / coef(.x)[["abs562"]])) %>%
+      select(date, abs_lo),
+    by = "date"
+  )
 
 # Flag: (1) absorbance outside standard curve range, (2) within-plate duplicate CV > 30%
 prot_outliers <- prot %>%
@@ -200,13 +207,15 @@ prot_outliers %>%
   arrange(colony_id) %>%
   print(n = Inf)
 
-# Plot absorbance per sample; red = flagged
+# Plot absorbance per sample; shape = flagged
 prot_outliers %>%
-  ggplot(aes(x = reorder(colony_id, abs562), y = abs562, color = flag_range | flag_cv)) +
+  ggplot(aes(x = reorder(colony_id, abs562), y = abs562, color = fraction,
+             shape = flag_range | flag_cv)) +
   geom_point(size = 2) +
   geom_hline(aes(yintercept = abs_lo), linetype = "dashed", color = "gray50") +
   geom_hline(aes(yintercept = abs_hi), linetype = "dashed", color = "gray50") +
-  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red"),
+  scale_color_manual(values = c("Host" = "coral", "Sym" = "green"), name = "Fraction") +
+  scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 4),
                      labels = c("OK", "Flagged"), name = NULL) +
   labs(x = "Sample", y = "Absorbance (562 nm)", title = "Outlier check") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))

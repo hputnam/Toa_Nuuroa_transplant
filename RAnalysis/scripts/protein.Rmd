@@ -15,6 +15,8 @@ if (!require("broom")) install.packages("broom")
 # load packages
 library(tidyverse)
 library(broom)
+library(ggplot2)
+
 ```
 
 # Import data
@@ -81,43 +83,79 @@ std_curve <- df %>%
   #mutate(abs562.adj = abs562 - abs562[std == "I"]) %>%       # subtract blank absorbace value from all
   left_join(standards)
 
-## Fit one nonlinear model per date using all standards from that date
-std_models <- std_curve %>%
+# ## Fit one nonlinear model per date using all standards from that date
+# std_models <- std_curve %>%
+#   group_by(date) %>%
+#   nest() %>%
+#   mutate(
+#     mod = map(data, function(d) {
+#       # Derive starting values from data: solve z + a*exp(b*lo) = 0, z + a*exp(b*hi) = max(BSA)
+#       b0 <- 1
+#       lo  <- min(d$abs562); hi <- max(d$abs562)
+#       a0  <- max(d$BSA_ug.mL) / (exp(b0 * hi) - exp(b0 * lo))
+#       z0  <- -a0 * exp(b0 * lo)
+#       nls(BSA_ug.mL ~ z + a * exp(b * abs562),
+#           start = list(z = z0, a = a0, b = b0), data = d)
+#     }),
+#     fitted = map(mod, broom::augment),
+#     label  = map2_chr(mod, data, ~{
+#       cf <- coef(.x)
+#       r2 <- 1 - sum(residuals(.x)^2) / sum((.y$BSA_ug.mL - mean(.y$BSA_ug.mL))^2)
+#       sprintf("BSA = %.0f + %.0f \u00d7 exp(%.2f \u00d7 Abs)\nR\u00b2 = %.4f",
+#               cf["z"], cf["a"], cf["b"], r2)
+#     })
+#   )
+# 
+# # Plot standard curve from nls fit
+# std_curve_plot <- std_curve %>%
+#   ggplot(aes(x = abs562, y = BSA_ug.mL, color = date)) +
+#   geom_point(size = 3)
+# 
+# Stnd <- std_curve_plot +
+#   geom_line(data = std_models %>% unnest(fitted),
+#             aes(x = abs562, y = .fitted, color = date)) +
+#   geom_label(data = std_models,
+#              aes(x = -Inf, y = Inf, label = label, color = date),
+#              hjust = -0.05, vjust = 1.1, size = 3,
+#              inherit.aes = FALSE, show.legend = FALSE) +
+#   labs(title = "Standard curve")
+# Stnd
+
+
+## Fit one linear model per date using all standards from that date
+lm_models <- std_curve %>%
   group_by(date) %>%
   nest() %>%
   mutate(
-    mod = map(data, function(d) {
-      # Derive starting values from data: solve z + a*exp(b*lo) = 0, z + a*exp(b*hi) = max(BSA)
-      b0 <- 1
-      lo  <- min(d$abs562); hi <- max(d$abs562)
-      a0  <- max(d$BSA_ug.mL) / (exp(b0 * hi) - exp(b0 * lo))
-      z0  <- -a0 * exp(b0 * lo)
-      nls(BSA_ug.mL ~ z + a * exp(b * abs562),
-          start = list(z = z0, a = a0, b = b0), data = d)
-    }),
+    mod    = map(data, ~ lm(BSA_ug.mL ~ abs562, data = .x)),
     fitted = map(mod, broom::augment),
     label  = map2_chr(mod, data, ~{
       cf <- coef(.x)
-      r2 <- 1 - sum(residuals(.x)^2) / sum((.y$BSA_ug.mL - mean(.y$BSA_ug.mL))^2)
-      sprintf("BSA = %.0f + %.0f \u00d7 exp(%.2f \u00d7 Abs)\nR\u00b2 = %.4f",
-              cf["z"], cf["a"], cf["b"], r2)
+      r2 <- summary(.x)$r.squared
+      sprintf("BSA = %.2f + %.2f \u00d7 Abs\nR\u00b2 = %.4f",
+              cf["(Intercept)"], cf["abs562"], r2)
     })
   )
 
-# Plot standard curve
+# Plot standard curve from lm fit
 std_curve_plot <- std_curve %>%
   ggplot(aes(x = abs562, y = BSA_ug.mL, color = date)) +
   geom_point(size = 3)
 
-Stnd <- std_curve_plot +
-  geom_line(data = std_models %>% unnest(fitted),
+Stnd_lm <- std_curve_plot +
+  geom_line(data = lm_models %>% unnest(fitted),
             aes(x = abs562, y = .fitted, color = date)) +
-  geom_label(data = std_models,
-             aes(x = -Inf, y = Inf, label = label, color = date),
-             hjust = -0.05, vjust = 1.1, size = 3,
+  geom_label(data = lm_models %>%
+               unnest(fitted) %>%
+               group_by(date, label) %>%
+               slice_max(abs562, n = 1) %>%
+               ungroup(),
+             aes(x = abs562, y = .fitted, label = label, color = date),
+             hjust = 1, vjust = 0, size = 2.5,
              inherit.aes = FALSE, show.legend = FALSE) +
-  labs(title = "Standard curve")
-Stnd
+  labs(title = "Standard curve (linear fit)")
+Stnd_lm
+
 ```
 
 # Calculate protein concentrations
@@ -126,10 +164,10 @@ Stnd
 prot <- df %>%
   unnest(merged) %>%
   filter(!grepl("Standard", colony_id)) %>%                     # Get just samples (not standards)
-  select(date, plate, well, colony_id, abs562 = `562:562`) %>%  # Select only needed columns
+  select(date, plate, fraction, well, colony_id, abs562 = `562:562`) %>%  # Select only needed columns
   filter(!is.na(colony_id)) %>%                                 # Filter out empty wells
   filter(colony_id != "BLANK") %>%                              # Filter out blank wells
-  left_join(std_models %>% select(date, mod), by = "date") %>%  # Join date-matched model
+  left_join(lm_models %>% select(date, mod), by = "date") %>%  # Join date-matched model
   mutate(prot_ug.mL = map2_dbl(abs562, mod,                     # Predict using date's model
                                 ~predict(.y, newdata = data.frame(abs562 = .x)))) %>%
   select(-mod)                                                  # Drop model column
@@ -205,10 +243,10 @@ prot <- prot_outliers %>%
 # Calculate mean of technical duplicates and Normalize to surface area
 ```{r}
 
-#Calculate mean of duplicates
+# Calculate mean of technical replicates within each plate
 prot.mean <- prot %>% 
-  group_by(colony_id) %>%
-  summarise(prot_ug.mL = mean(prot_ug.mL, na.rm = T))
+  group_by(date, plate, fraction, colony_id) %>%
+  summarise(prot_ug.mL = mean(prot_ug.mL, na.rm = TRUE), .groups = "drop")
 
 
 # Surface area data
@@ -231,9 +269,48 @@ prot.calc <- left_join(prot.mean, metadata, by="colony_id") %>%
          prot_mg.cm2 = prot_ug.cm2 / 1000)
 ```
 
+# Check for duplicates within and across plates; retain most recent run
+```{r}
+# Within-plate duplicates (same colony_id appearing more than once on the same plate)
+within_plate_dups <- prot.calc %>%
+  group_by(date, plate,fraction, colony_id) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+if (nrow(within_plate_dups) > 0) {
+  warning(nrow(within_plate_dups), " within-plate duplicate(s) found:")
+  print(within_plate_dups %>% select(date, plate, colony_id, prot_ug.mL))
+} else {
+  cat("No within-plate duplicates found.\n")
+}
+
+# Across-plate duplicates (same colony_id run on more than one plate)
+across_plate_dups <- prot.calc %>%
+  group_by(colony_id, fraction) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+if (nrow(across_plate_dups) > 0) {
+  cat(n_distinct(across_plate_dups$colony_id), "colony_id(s) run on multiple plates:\n")
+  print(across_plate_dups %>%
+          select(date, plate, colony_id, prot_ug.mL) %>%
+          arrange(colony_id, date))
+} else {
+  cat("No across-plate duplicates found.\n")
+}
+
+# Keep only the most recent run for each colony_id + fraction combination
+# (date is YYYYMMDD-formatted, so descending sort gives the latest plate first)
+prot.calc <- prot.calc %>%
+  arrange(desc(date)) %>%
+  distinct(colony_id, fraction, .keep_all = TRUE)
+
+cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")
+```
+
+
 #plot by site and timepoint
 ```{r}
-library(ggplot2)
 
 prot.calc |>
   ggplot(aes(x = monitoring, y = prot_mg.cm2, color = site, group = site)) +

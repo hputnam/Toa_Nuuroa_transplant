@@ -15,20 +15,25 @@ library(tidyverse)
 
 # Overview
 
-The sample info file uses two `colony_id` formats depending on timepoint:
+Tube labels appear in several formats — the site–coral separator (underscore or none), the order of timepoint and replicate, and the replicate prefix (`R` or zero-padded) all vary:
 
-| Timepoint | Format | Example |
-|-----------|--------|---------|
-| T0 | `{site}_{coral}_{timepoint}_R{rep}` | `JC_40_T0_R1` |
-| T1+ | `{site}{coral}_{timepoint}_R{rep}` | `JC40_T2_R1` |
+| Variant | Format | Example |
+|---------|--------|---------|
+| underscore, timepoint first, R-prefix | `{site}_{coral}_{timepoint}_R{rep}` | `JC_40_T0_R1` |
+| no underscore, timepoint first, R-prefix | `{site}{coral}_{timepoint}_R{rep}` | `JC40_T2_R1` |
+| underscore, rep first, R-prefix | `{site}_{coral}_R{rep}_{timepoint}` | `JC_40_R1_T0` |
+| underscore, rep first, zero-padded | `{site}_{coral}_0{rep}_{timepoint}` | `JC_40_01_T0` |
 
-The data files use a different format with replicate and timepoint swapped, the `R` prefix dropped, and the replicate zero-padded:
+All variants are parsed into their components and four `colony_id` columns are generated — one for each format that may appear in downstream datasheets:
 
-| Target format | Example |
-|---------------|---------|
-| `{site}_{coral}_{rep}_{timepoint}` | `JC_40_01_T0` |
+| Column | Format | Example | Where used |
+|--------|--------|---------|------------|
+| `colony_id` | `{site}_{coral}_{rep_pad}_{timepoint}` | `JC_40_01_T0` | platemaps (chlorophyll, protein) |
+| `colony_id_tp_R` | `{site}_{coral}_{timepoint}_R{rep}` | `JC_40_T0_R1` | homogenate vols, surface area |
+| `colony_id_tp_pad` | `{site}_{coral}_{timepoint}_{rep_pad}` | `JC_40_T0_01` | timepoint-first, zero-padded variant |
+| `colony_id_R_tp` | `{site}_{coral}_R{rep}_{timepoint}` | `JC_40_R1_T0` | rep-first, R-prefix variant |
 
-This script parses the original IDs and creates a standardised `colony_id` column that matches the data files.
+Join downstream datasheets to this table using whichever column matches the format recorded on the tubes.
 
 # Read sample info
 
@@ -38,19 +43,39 @@ sample_info <- read_csv("data/master_sample_info.csv")
 
 # Create colony_id
 
-A single regex with an optional `_?` between site and coral number handles both input formats.
+A helper function tries both field orders and both replicate prefixes (`R` or zero-padded `0`), then coalesces the results.
 
 ```{r transform}
+# Parse site / coral / timepoint / rep from a vector of raw IDs.
+# Handles two field orders and two rep-prefix styles:
+#   Pattern A (timepoint before rep): site_?coral_timepoint_[R|0]rep
+#   Pattern B (rep before timepoint): site_?coral_[R|0]rep_timepoint
+parse_id <- function(x) {
+  mA <- str_match(x, "^([A-Z]+)_?([0-9]+)_(T[0-9]+)_[R0]?([0-9]+)$")
+  mB <- str_match(x, "^([A-Z]+)_?([0-9]+)_[R0]?([0-9]+)_(T[0-9]+)$")
+  tibble(
+    site      = coalesce(mA[, 2], mB[, 2]),
+    coral     = coalesce(mA[, 3], mB[, 3]),
+    timepoint = coalesce(mA[, 4], mB[, 5]),
+    rep       = coalesce(mA[, 5], mB[, 4])
+  )
+}
+
 sample_info <- sample_info %>%
-  extract(
-    original_id,
-    into   = c("site", "coral", "timepoint", "rep"),
-    regex  = "^([A-Z]+)_?([0-9]+)_(T[0-9]+)_R([0-9]+)$",
-    remove = FALSE
-  ) %>%
+  bind_cols(parse_id(.$original_id)) %>%
   mutate(
-    colony_id = paste(site, coral, sprintf("%02d", as.integer(rep)), timepoint, sep = "_")
-  ) 
+    rep_n        = as.integer(rep),
+    rep_pad      = sprintf("%02d", rep_n),
+    # Canonical: rep-first, zero-padded — matches platemaps
+    colony_id        = paste(site, coral, rep_pad,             timepoint, sep = "_"),
+    # Timepoint-first, R-prefix — e.g. homogenate vols, surface area
+    colony_id_tp_R   = paste(site, coral, timepoint, paste0("R", rep_n), sep = "_"),
+    # Timepoint-first, zero-padded
+    colony_id_tp_pad = paste(site, coral, timepoint, rep_pad,             sep = "_"),
+    # Rep-first, R-prefix
+    colony_id_R_tp   = paste(site, coral, paste0("R", rep_n), timepoint,  sep = "_")
+  ) %>%
+  select(-rep_n, -rep_pad)
 ```
 
 # Spot-check
@@ -61,7 +86,7 @@ One row per timepoint to verify the transformation.
 sample_info %>%
   group_by(monitoring) %>%
   slice(1) %>%
-  select(original_id, colony_id, monitoring)
+  select(original_id, colony_id, colony_id_tp_R, colony_id_tp_pad, colony_id_R_tp, monitoring)
 ```
 
 # Check for parse failures

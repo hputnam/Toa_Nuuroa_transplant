@@ -146,8 +146,9 @@ chl <- chl.calc %>%
 chl <- filter(chl, !colony_id %in% c("NA", "BLANK"))
 
 # write chlorophyll data to file
-chl %>%
-  select(colony_id, chla.ug.cm2, chlc2.ug.cm2) %>%
+chl <- chl %>%
+  select(original_id, colony_id, timepoint, site, chla.ug.cm2, chlc2.ug.cm2) %>%
+  filter(!is.na(timepoint)) %>%
   filter(!is.na(chla.ug.cm2))%>%
   filter(!is.na(chlc2.ug.cm2))%>%
   write_csv(path = "output/chlorophyll.csv")
@@ -156,20 +157,24 @@ chl %>%
 #plot by site and timepoint
 ```{r}
 chl |>
-  ggplot(aes(x = monitoring, y = chla.ug.cm2, color = site, group = site)) +
+  ggplot(aes(x = timepoint, y = chla.ug.cm2, color = site, group = site)) +
+  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
   stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun = mean, geom = "point", size = 2) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
   labs(x = "Timepoint", y = expression("Chl-a (µg cm"^-2*")"), color = "Site") +
   theme_bw()
 
+
 chl |>
-  ggplot(aes(x = monitoring, y = chlc2.ug.cm2, color = site, group = site)) +
+  ggplot(aes(x = timepoint, y = chlc2.ug.cm2, color = site, group = site)) +
+  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
   stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point") +
+  stat_summary(fun = mean, geom = "point", size = 2) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
-  labs(x = "Timepoint", y = expression("Chl-c2 (µg cm"^-2*")"), color = "Site") +
+  labs(x = "Timepoint", y = expression("Chlc2 (µg cm"^-2*")"), color = "Site") +
   theme_bw()
+
 
 
 ```

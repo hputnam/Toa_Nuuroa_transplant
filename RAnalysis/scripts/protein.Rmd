@@ -315,6 +315,14 @@ prot.calc <- prot.calc %>%
   distinct(colony_id, fraction, .keep_all = TRUE)
 
 cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")
+
+# Write protein data to output file
+prot.calc <- prot.calc %>%
+  select(original_id, colony_id, timepoint, site, prot_ug, prot_mg.cm2) %>%
+  filter(!is.na(timepoint)) %>%
+  filter(!is.na(prot_mg.cm2))%>%
+  write_csv(file = "output/protein_calcs.csv")
+
 ```
 
 
@@ -322,29 +330,15 @@ cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")
 ```{r}
 
 prot.calc |>
-  ggplot(aes(x = monitoring, y = prot_mg.cm2, color = site, group = site)) +
+  ggplot(aes(x = timepoint, y = prot_mg.cm2, color = site, group = site)) +
+  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
   stat_summary(fun = mean, geom = "line") +
   stat_summary(fun = mean, geom = "point") +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
   labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
   theme_bw()
 
-prot.calc |>
-  ggplot(aes(x = monitoring, y = prot_mg.cm2, color = coral, group = interaction(coral, site))) +
-  stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point") +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
-  labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
-  theme_bw()
 
 ```
 
-
-# Write data to output file
-```{r}
-# Write protein data to output file
-prot.calc %>%
-  select(colony_id, prot_ug, prot_mg.cm2) %>%
-  write_csv(., file = "output/protein_calcs.csv")
-```
 

@@ -1,4 +1,4 @@
-well,colony_id,
+well,colony_id,notes
 A1,StandardA,
 A2,StandardB,
 A3,StandardC,
@@ -28,7 +28,7 @@ C2,SE_20_01_T0,
 C3,SE_20_04_T0,
 C4,SE_25_03_T0,
 C5,SE_24_05_T0,
-C6,SE_23_02_T0,
+C6,SE_23_02_T0,"concentration out of the standards, 2nd dilution was made and run in plate 12 sym"
 C7,SE_21_05_T0,
 C8,SE_23_03_T0,
 C9,SE_25_01_T0,
@@ -40,7 +40,7 @@ D2,SE_20_01_T0,
 D3,SE_20_04_T0,
 D4,SE_25_03_T0,
 D5,SE_24_05_T0,
-D6,SE_23_02_T0,
+D6,SE_23_02_T0,"concentration out of the standards, 2nd dilution was made and run in plate 12 sym"
 D7,SE_21_05_T0,
 D8,SE_23_03_T0,
 D9,SE_25_01_T0,

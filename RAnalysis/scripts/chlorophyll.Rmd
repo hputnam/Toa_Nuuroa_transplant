@@ -86,20 +86,11 @@ chl_iqr_fence <- quantile(df$chla.ug.ml, 0.75, na.rm = TRUE) +
   1.5 * IQR(df$chla.ug.ml, na.rm = TRUE)
 df %>% filter(chla.ug.ml > chl_iqr_fence) %>% arrange(desc(chla.ug.ml))
 
-# Check for duplicate colony_id
-chl.dups <- df %>% count(colony_id) %>% filter(n > 1)
-
-# For duplicates, keep the most recent plate run (file names are YYYYMMDD-prefixed,
-# so arranging descending retains the latest re-run over earlier measurements).
-# January 2026 plates (Plate10, 12, 13) were intentional re-runs of November 2025 originals.
-# August 2026 plates (Plate15, 16; run 2026-08-13) were a further re-run of 5 colonies:
-#   AS-B9z, MH-B6, MH-E7z, PG-E6, PV-B1 — August values retained as the authoritative measurement.
+# Parse date and plate from file name, e.g., "20261023_Plate1_Chlorophyll.csv"
+# Duplicates across plates are checked and resolved below, after joining metadata
 df <- df %>%
-  arrange(desc(file)) %>%
-  distinct(colony_id, .keep_all = TRUE)
-
-# Confirm duplicates resolved
-chl.dups <- df %>% count(colony_id) %>% filter(n > 1)
+  mutate(plate = str_remove(file, "_Chlorophyll\\.csv")) %>%
+  separate(plate, into = c("date", "plate_num"), sep = "_", remove = FALSE)
 
 write_csv(df, path = "output/chlorophyll_list.csv")
 
@@ -111,9 +102,10 @@ write_csv(df, path = "output/chlorophyll_list.csv")
 
 #Calculate mean of duplicates
 chl.mean <- df %>% 
-  group_by(colony_id) %>%
+  group_by(date, plate, plate_num, colony_id) %>%
   summarise(chla.ug.ml = mean(chla.ug.ml, na.rm = T),
-            chlc2.ug.ml = mean(chlc2.ug.ml, na.rm = T))
+            chlc2.ug.ml = mean(chlc2.ug.ml, na.rm = T),
+            .groups = "drop")
 
 # Surface area data
 sa <- read.csv("output/surface_area_calculated.csv")
@@ -144,7 +136,43 @@ chl <- chl.calc %>%
 
 # remove blanks and NAs
 chl <- filter(chl, !colony_id %in% c("NA", "BLANK"))
+```
 
+
+
+# Check for duplicates within and across plates
+```{r}
+# Within-plate duplicates (same colony_id appearing more than once on the same plate)
+within_plate_dups <- chl %>%
+  group_by(date, plate, colony_id) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+if (nrow(within_plate_dups) > 0) {
+  warning(nrow(within_plate_dups), " within-plate duplicate(s) found:")
+  print(within_plate_dups %>% select(date, plate, colony_id, chla.ug.cm2))
+} else {
+  cat("No within-plate duplicates found.\n")
+}
+
+# Across-plate duplicates (same colony_id run on more than one plate)
+across_plate_dups <- chl %>%
+  group_by(colony_id) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+if (nrow(across_plate_dups) > 0) {
+  cat(n_distinct(across_plate_dups$colony_id), "colony_id(s) run on multiple plates:\n")
+  print(across_plate_dups %>%
+          select(date, plate, colony_id, chla.ug.cm2) %>%
+          arrange(colony_id, date))
+} else {
+  cat("No across-plate duplicates found.\n")
+}
+
+```
+
+```{r}
 # write chlorophyll data to file
 chl <- chl %>%
   select(original_id, colony_id, timepoint, site, chla.ug.cm2, chlc2.ug.cm2) %>%

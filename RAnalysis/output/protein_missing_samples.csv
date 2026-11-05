@@ -1,0 +1,61 @@
+original_id,colony_id,site,coral,timepoint,rep,missing_fraction,removed_host,removed_sym,reason
+JC40_T2_R4,JC_40_04_T2,JC,40,T2,4,Host,out of range,NA,NA
+JC41_T3_R2,JC_41_02_T3,JC,41,T3,2,Host,out of range,NA,NA
+JC41_T4_R1,JC_41_01_T4,JC,41,T4,1,Host,out of range,NA,NA
+JC41_T5_R5,JC_41_05_T5,JC,41,T5,5,Host,out of range,out of range,NA
+JC42_T3_R1,JC_42_01_T3,JC,42,T3,1,Host,out of range,NA,NA
+JC42_T3_R2,JC_42_02_T3,JC,42,T3,2,Host,out of range,NA,NA
+JC44_T2_R1,JC_44_01_T2,JC,44,T2,1,Host,out of range,NA,NA
+JC44_T2_R4,JC_44_04_T2,JC,44,T2,4,Host,out of range,out of range,NA
+JC44_T3_R3,JC_44_03_T3,JC,44,T3,3,Host,out of range,NA,NA
+JC44_T3_R4,JC_44_04_T3,JC,44,T3,4,Host,out of range,NA,NA
+JC44_T5_R3,JC_44_03_T5,JC,44,T5,3,Host,out of range,out of range,NA
+JC45_T3_R1,JC_45_01_T3,JC,45,T3,1,Host,out of range,NA,NA
+LS30_T2_R1,LS_30_01_T2,LS,30,T2,1,Host,out of range,NA,NA
+LS30_T2_R2,LS_30_02_T2,LS,30,T2,2,Host,out of range,NA,NA
+LS30_T3_R1,LS_30_01_T3,LS,30,T3,1,Host,out of range,NA,NA
+LS30_T3_R2,LS_30_02_T3,LS,30,T3,2,Host,out of range,NA,NA
+LS31_T2_R4,LS_31_04_T2,LS,31,T2,4,Host,out of range,NA,NA
+LS31_T3_R2,LS_31_02_T3,LS,31,T3,2,Host,out of range,NA,NA
+LS32_T2_R3,LS_32_03_T2,LS,32,T2,3,Host,out of range,NA,NA
+LS32_T2_R4,LS_32_04_T2,LS,32,T2,4,Host,out of range,NA,NA
+LS32_T2_R5,LS_32_05_T2,LS,32,T2,5,Host,out of range,NA,NA
+LS33_T2_R4,LS_33_04_T2,LS,33,T2,4,Host,out of range,NA,NA
+LS33_T2_R5,LS_33_05_T2,LS,33,T2,5,Host,out of range,NA,NA
+LS34_T2_R1,LS_34_01_T2,LS,34,T2,1,Host,out of range,NA,NA
+LS34_T2_R2,LS_34_02_T2,LS,34,T2,2,Host,out of range,NA,NA
+LS34_T2_R3,LS_34_03_T2,LS,34,T2,3,Host,out of range,NA,NA
+LS34_T2_R4,LS_34_04_T2,LS,34,T2,4,Host,out of range,NA,NA
+LS34_T3_R3,LS_34_03_T3,LS,34,T3,3,Host,out of range,NA,NA
+LS35_T2_R2,LS_35_02_T2,LS,35,T2,2,Host,out of range,NA,NA
+LS35_T2_R4,LS_35_04_T2,LS,35,T2,4,Host,out of range,NA,NA
+SE20_T2_R1,SE_20_01_T2,SE,20,T2,1,Host,out of range,NA,NA
+SE20_T2_R2,SE_20_02_T2,SE,20,T2,2,Host,out of range,NA,NA
+SE20_T2_R5,SE_20_05_T2,SE,20,T2,5,Host,out of range,NA,NA
+SE22_T3_R2,SE_22_02_T3,SE,22,T3,2,Host,out of range,NA,NA
+SE23_T1_R2,SE_23_02_T1,SE,23,T1,2,Host,out of range,NA,NA
+SE24_T1_R2,SE_24_02_T1,SE,24,T1,2,Host,out of range,NA,NA
+SE24_T2_R2,SE_24_02_T2,SE,24,T2,2,Host,out of range,NA,NA
+SE24_T2_R5,SE_24_05_T2,SE,24,T2,5,Host,out of range,NA,NA
+SE25_T1_R1,SE_25_01_T1,SE,25,T1,1,Host,out of range,NA,NA
+JC40_T2_R3,JC_40_03_T2,JC,40,T2,3,Host and Sym,out of range,out of range,NA
+JC40_T4_R2,JC_40_02_T4,JC,40,T4,2,Host and Sym,out of range,high CV (>30%),NA
+JC_42_T0_R5,JC_42_05_T0,JC,42,T0,5,Host and Sym,NA,NA,NA
+JC43_T1_R2,JC_43_02_T1,JC,43,T1,2,Host and Sym,NA,NA,NA
+JC44_T4_R1,JC_44_01_T4,JC,44,T4,1,Host and Sym,NA,NA,NA
+LS_31_T0_R5,LS_31_05_T0,LS,31,T0,5,Host and Sym,NA,NA,NA
+LS32_T1_R1,LS_32_01_T1,LS,32,T1,1,Host and Sym,out of range,out of range,NA
+LS32_T1_R2,LS_32_02_T1,LS,32,T1,2,Host and Sym,NA,NA,NA
+LS35_T2_R3,LS_35_03_T2,LS,35,T2,3,Host and Sym,NA,NA,NA
+SE20_T2_R3,SE_20_03_T2,SE,20,T2,3,Host and Sym,out of range,out of range,NA
+SE20_T2_R4,SE_20_04_T2,SE,20,T2,4,Host and Sym,out of range,out of range,NA
+SE_25_T0_R4,SE_25_04_T0,SE,25,T0,4,Host and Sym,NA,NA,no homogenate volume
+JC40_T2_R2,JC_40_02_T2,JC,40,T2,2,Sym,NA,high CV (>30%),NA
+JC40_T4_R3,JC_40_03_T4,JC,40,T4,3,Sym,NA,high CV (>30%),NA
+JC40_T5_R3,JC_40_03_T5,JC,40,T5,3,Sym,NA,out of range,NA
+JC42_T2_R1,JC_42_01_T2,JC,42,T2,1,Sym,NA,out of range,NA
+LS_32_T0_R2,LS_32_02_T0,LS,32,T0,2,Sym,NA,high CV (>30%),NA
+LS_35_T0_R5,LS_35_05_T0,LS,35,T0,5,Sym,NA,out of range,NA
+LS35_T4_R1,LS_35_01_T4,LS,35,T4,1,Sym,NA,out of range,NA
+SE21_T4_R5,SE_21_05_T4,SE,21,T4,5,Sym,NA,out of range; high CV; high CV (>30%),NA
+SE25_T4_R4,SE_25_04_T4,SE,25,T4,4,Sym,NA,high CV (>30%); out of range; high CV,NA

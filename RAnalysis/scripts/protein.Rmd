@@ -48,7 +48,54 @@ df <- tibble(file = prot_data_files) %>%
            sep = "_", remove = FALSE) %>%
   mutate(platemap = map(plate, ~read_csv(paste0(prot_path, ., "_prot_platemap.csv")) %>%
                           mutate(colony_id = str_trim(colony_id))),  # trim whitespace from colony_id
+         # prot_sym_dilution = uL of 1x PBS added to the aliquot before this run
+         # (blank or absent column = undiluted)
+         platemap = map2(platemap, plate, function(pm, plate_name) {
+           if (!"prot_sym_dilution" %in% names(pm)) pm$prot_sym_dilution <- NA_character_
+           dil_raw <- as.character(pm$prot_sym_dilution)
+           dil_num <- suppressWarnings(as.numeric(dil_raw))
+           # Text entered in this column (e.g. a note) is not a dilution; report and treat as undiluted
+           notes <- !is.na(dil_raw) & trimws(dil_raw) != "" & is.na(dil_num)
+           if (any(notes)) {
+             cat("Non-numeric prot_sym_dilution treated as undiluted in", plate_name, ":\n")
+             print(data.frame(well = pm$well[notes], colony_id = pm$colony_id[notes], value = dil_raw[notes]))
+           }
+           pm$prot_sym_dilution <- replace_na(dil_num, 0)
+           pm
+         }),
          prot_data = map(file, ~read_prot_plate(paste0(prot_path, .))))
+
+# Resolve platemap labels to the canonical colony_id (see make_colony_id.Rmd).
+# Some plate maps were written with another tube-label format (e.g. colony_id_tp_R,
+# "JC_40_T0_R2"); look each label up across all four ID columns in the sample info.
+sample_ids <- read.csv("data/sample_info_colony_id.csv")
+
+id_lookup <- sample_ids %>%
+  select(canonical = colony_id, colony_id, colony_id_tp_R, colony_id_tp_pad, colony_id_R_tp) %>%
+  pivot_longer(-canonical, values_to = "label") %>%
+  distinct(label, canonical)
+
+stopifnot("a platemap label matches more than one colony_id" = !anyDuplicated(id_lookup$label))
+
+df <- df %>%
+  mutate(platemap = map(platemap, ~ .x %>%
+                          left_join(id_lookup, by = c("colony_id" = "label")) %>%
+                          mutate(colony_id = coalesce(canonical, colony_id)) %>%
+                          select(-canonical)))
+
+# Fail if any sample label still matches no colony_id (excluding standards, blanks, empty wells)
+unmatched_labels <- df %>%
+  select(plate, platemap) %>%
+  unnest(platemap) %>%
+  filter(!is.na(colony_id), colony_id != "BLANK", !grepl("Standard", colony_id),
+         !colony_id %in% sample_ids$colony_id) %>%
+  distinct(plate, colony_id)
+
+if (nrow(unmatched_labels) > 0) {
+  print(unmatched_labels, n = Inf)
+  stop(n_distinct(unmatched_labels$colony_id),
+       " platemap label(s) match no ID column in data/sample_info_colony_id.csv; fix the platemap or sample info.")
+}
 
 # Merge platemap and data for each plate
 df <- df %>%
@@ -164,7 +211,7 @@ Stnd_lm
 prot <- df %>%
   unnest(merged) %>%
   filter(!grepl("Standard", colony_id)) %>%                     # Get just samples (not standards)
-  select(date, plate, fraction, well, colony_id, abs562 = `562:562`) %>%  # Select only needed columns
+  select(date, plate, fraction, well, colony_id, prot_sym_dilution, abs562 = `562:562`) %>%  # Select only needed columns
   filter(!is.na(colony_id)) %>%                                 # Filter out empty wells
   filter(colony_id != "BLANK") %>%                              # Filter out blank wells
   left_join(lm_models %>% select(date, mod), by = "date") %>%  # Join date-matched model
@@ -254,15 +301,16 @@ prot <- prot_outliers %>%
 
 # Calculate mean of technical replicates within each plate
 prot.mean <- prot %>% 
-  group_by(date, plate, fraction, colony_id) %>%
+  group_by(date, plate, fraction, colony_id, prot_sym_dilution) %>%
   summarise(prot_ug.mL = mean(prot_ug.mL, na.rm = TRUE), .groups = "drop")
 
 
 # Surface area data
 sa <- read.csv("output/surface_area_calculated.csv")
 
-# Tissue homogenate volume data
-homog_vols <- read.csv("data/homogenate_vols.csv") 
+# Tissue homogenate volume data (dilution is recorded per run in the plate maps instead)
+homog_vols <- read.csv("data/homogenate_vols.csv") %>%
+  select(-any_of("prot_sym_dilution"))
 
 # Coral sample metadata
 metadata <- read.csv("data/sample_info_colony_id.csv") 
@@ -271,11 +319,34 @@ metadata <- read.csv("data/sample_info_colony_id.csv")
 metadata <- full_join(metadata, homog_vols) %>%
   full_join(sa)
 
+# Dilution protocol: the aliquot was 500 uL; 50 uL (2 x 25 uL) was removed for the first
+# assay, leaving 450 uL. prot_sym_dilution uL of PBS was then added to the remaining volume.
+aliquot_ul       <- 500
+assay_removed_ul <- 50
+remaining_ul     <- aliquot_ul - assay_removed_ul
+
 # Join prot data with metadata
 prot.calc <- left_join(prot.mean, metadata, by="colony_id") %>%
-  mutate(prot_ug = prot_ug.mL * homog_vol_ml,
-         prot_ug.cm2 = prot_ug / surface.area.cm2,
-         prot_mg.cm2 = prot_ug.cm2 / 1000)
+  mutate(plate_num       = as.integer(str_extract(plate, "(?<=Plate)\\d+")),
+         # uL of PBS added before this run, from the plate map
+         pbs_added_ul    = prot_sym_dilution,
+         dilution_factor = (remaining_ul + pbs_added_ul) / remaining_ul,
+         diluted_repeat  = pbs_added_ul > 0,
+         # Back-calculate concentration of the undiluted homogenate
+         prot_ug.mL      = prot_ug.mL * dilution_factor,
+         prot_ug         = prot_ug.mL * homog_vol_ml,
+         prot_ug.cm2     = prot_ug / surface.area.cm2,
+         prot_mg.cm2     = prot_ug.cm2 / 1000,
+         # Corrected concentration exceeds the top standard (informational; not removed)
+         flag_above_top_std = prot_ug.mL > max(standards$BSA_ug.mL))
+
+prot.calc %>%
+  filter(flag_above_top_std) %>%
+  select(plate, colony_id, fraction, diluted_repeat, dilution_factor, prot_ug.mL) %>%
+  print()
+
+# Dilution is primarily expected for Sym runs
+stopifnot(!any(prot.calc$diluted_repeat & prot.calc$fraction != "Sym"))
 ```
 
 # Check for duplicates within and across plates; retain most recent run
@@ -308,10 +379,10 @@ if (nrow(across_plate_dups) > 0) {
   cat("No across-plate duplicates found.\n")
 }
 
-# Keep only the most recent run for each colony_id + fraction combination
-# (date is YYYYMMDD-formatted, so descending sort gives the latest plate first)
+# Keep one run for each colony_id + fraction combination: the diluted repeat if one
+# exists, otherwise the most recent run (date is YYYYMMDD; plate_num breaks same-day ties)
 prot.calc <- prot.calc %>%
-  arrange(desc(date)) %>%
+  arrange(desc(diluted_repeat), desc(date), desc(plate_num)) %>%
   distinct(colony_id, fraction, .keep_all = TRUE)
 
 cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")

@@ -5,6 +5,7 @@ editor_options:
   chunk_output_type: console
 ---
 
+# Load Libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
@@ -118,69 +119,38 @@ standards <- tribble(
   "I",           0
 )
 
-# Pool all standard wells across plates for each date
+# Collect all standard wells (Host and Sym plates each have their own standards)
 std_curve <- df %>%
   unnest(merged) %>%
   filter(grepl("Standard", colony_id)) %>%
   select(date, plate, well, colony_id, abs562 = `562:562`) %>%
   rename(std = colony_id) %>%
-  mutate(std = str_sub(std, 9, 9)) %>%
+  mutate(std = str_sub(std, 9, 9),
+         # Host and Sym are read as separate plates, each with its own standards
+         fraction = str_extract(plate, "Host|Sym")) %>%
   #group_by(std) %>%
   #summarise(abs562 = mean(abs562)) %>%                       # calculate mean of standard duplicates
   #mutate(abs562.adj = abs562 - abs562[std == "I"]) %>%       # subtract blank absorbace value from all
-  left_join(standards)
+  left_join(standards) %>%
+  # Exclude one 750 ug/mL standard that reads ~1.30 (its duplicate reads 0.99, and 1000 ug/mL
+  # standards read ~1.27-1.32), likely a pipetting or labeling error
+  filter(!(plate == "20261026_Plate8_Sym" & well == "A4"))
 
-# ## Fit one nonlinear model per date using all standards from that date
-# std_models <- std_curve %>%
-#   group_by(date) %>%
-#   nest() %>%
-#   mutate(
-#     mod = map(data, function(d) {
-#       # Derive starting values from data: solve z + a*exp(b*lo) = 0, z + a*exp(b*hi) = max(BSA)
-#       b0 <- 1
-#       lo  <- min(d$abs562); hi <- max(d$abs562)
-#       a0  <- max(d$BSA_ug.mL) / (exp(b0 * hi) - exp(b0 * lo))
-#       z0  <- -a0 * exp(b0 * lo)
-#       nls(BSA_ug.mL ~ z + a * exp(b * abs562),
-#           start = list(z = z0, a = a0, b = b0), data = d)
-#     }),
-#     fitted = map(mod, broom::augment),
-#     label  = map2_chr(mod, data, ~{
-#       cf <- coef(.x)
-#       r2 <- 1 - sum(residuals(.x)^2) / sum((.y$BSA_ug.mL - mean(.y$BSA_ug.mL))^2)
-#       sprintf("BSA = %.0f + %.0f \u00d7 exp(%.2f \u00d7 Abs)\nR\u00b2 = %.4f",
-#               cf["z"], cf["a"], cf["b"], r2)
-#     })
-#   )
-# 
-# # Plot standard curve from nls fit
-# std_curve_plot <- std_curve %>%
-#   ggplot(aes(x = abs562, y = BSA_ug.mL, color = date)) +
-#   geom_point(size = 3)
-# 
-# Stnd <- std_curve_plot +
-#   geom_line(data = std_models %>% unnest(fitted),
-#             aes(x = abs562, y = .fitted, color = date)) +
-#   geom_label(data = std_models,
-#              aes(x = -Inf, y = Inf, label = label, color = date),
-#              hjust = -0.05, vjust = 1.1, size = 3,
-#              inherit.aes = FALSE, show.legend = FALSE) +
-#   labs(title = "Standard curve")
-# Stnd
-
-
-## Fit one linear model per date using all standards from that date
+## Fit one quadratic model per date and fraction using that fraction's standards
+# (object keeps the name lm_models; BCA standards are curved, and a linear fit
+# predicted negative concentrations at low absorbance. Host and Sym standards can
+# differ a lot within a date, e.g. 20261022, so they are not pooled.)
 lm_models <- std_curve %>%
-  group_by(date) %>%
+  group_by(date, fraction) %>%
   nest() %>%
   mutate(
-    mod    = map(data, ~ lm(BSA_ug.mL ~ abs562, data = .x)),
+    mod    = map(data, ~ lm(BSA_ug.mL ~ abs562 + I(abs562^2), data = .x)),
     fitted = map(mod, broom::augment),
     label  = map2_chr(mod, data, ~{
       cf <- coef(.x)
       r2 <- summary(.x)$r.squared
-      sprintf("BSA = %.2f + %.2f \u00d7 Abs\nR\u00b2 = %.4f",
-              cf["(Intercept)"], cf["abs562"], r2)
+      sprintf("BSA = %.1f + %.1f \u00d7 Abs + %.1f \u00d7 Abs\u00b2\nR\u00b2 = %.4f",
+              cf[1], cf[2], cf[3], r2)
     })
   )
 
@@ -194,70 +164,81 @@ Stnd_lm <- std_curve_plot +
             aes(x = abs562, y = .fitted, color = date)) +
   geom_label(data = lm_models %>%
                unnest(fitted) %>%
-               group_by(date, label) %>%
+               group_by(date, fraction, label) %>%
                slice_max(abs562, n = 1) %>%
                ungroup(),
              aes(x = abs562, y = .fitted, label = label, color = date),
              hjust = 1, vjust = 0, size = 2.5,
              inherit.aes = FALSE, show.legend = FALSE) +
-  labs(title = "Standard curve (linear fit)")
+  facet_wrap(~fraction) +
+  labs(title = "Standard curve (quadratic fit, per date and fraction)")
 Stnd_lm
 
 ```
 
 # Calculate protein concentrations
 ```{r}
-# Calculate protein concentration for all samples using the date-matched standard curve
+# Calculate protein concentration for all samples using the date- and fraction-matched standard curve
 prot <- df %>%
   unnest(merged) %>%
   filter(!grepl("Standard", colony_id)) %>%                     # Get just samples (not standards)
   select(date, plate, fraction, well, colony_id, prot_sym_dilution, abs562 = `562:562`) %>%  # Select only needed columns
   filter(!is.na(colony_id)) %>%                                 # Filter out empty wells
   filter(colony_id != "BLANK") %>%                              # Filter out blank wells
-  left_join(lm_models %>% select(date, mod), by = "date") %>%  # Join date-matched model
-  mutate(prot_ug.mL = map2_dbl(abs562, mod,                     # Predict using date's model
+  left_join(lm_models %>% select(date, fraction, mod), by = c("date", "fraction")) %>%  # Join matched model
+  mutate(prot_ug.mL = map2_dbl(abs562, mod,                     # Predict using the matched model
                                 ~predict(.y, newdata = data.frame(abs562 = .x)))) %>%
   select(-mod)                                                  # Drop model column
 
 std_curve_plot + 
   geom_point(data = prot, aes(x = abs562, y = prot_ug.mL, color = fraction), pch = "X", cex = 5, alpha = 0.3) +
   scale_color_manual(values = c("Host" = "coral", "Sym" = "green")) +
+  facet_wrap(~fraction) +
   labs(title = "All samples projected on standard curve")
 ```
 
 # Outlier check
 ```{r}
-# Absorbance bounds from the standard curve for each date
+# Absorbance bounds from the standard curve for each date and fraction.
+# Lower bound: the absorbance where the curve predicts 0 ug/mL, or the lowest standard
+# absorbance if the curve is already positive there. Upper bound: highest standard.
 std_range <- std_curve %>%
-  group_by(date) %>%
-  summarise(abs_hi = max(abs562), .groups = "drop") %>%
-  left_join(
-    lm_models %>%
-      mutate(abs_lo = map_dbl(mod, ~-coef(.x)[["(Intercept)"]] / coef(.x)[["abs562"]])) %>%
-      select(date, abs_lo),
-    by = "date"
-  )
+  group_by(date, fraction) %>%
+  summarise(abs_min = min(abs562), abs_hi = max(abs562), .groups = "drop") %>%
+  left_join(lm_models %>% select(date, fraction, mod), by = c("date", "fraction")) %>%
+  mutate(abs_lo = pmap_dbl(list(mod, abs_min, abs_hi), function(m, lo, hi) {
+    pred <- function(a) predict(m, data.frame(abs562 = a))
+    if (pred(lo) >= 0) lo else uniroot(pred, c(lo, hi))$root
+  })) %>%
+  select(date, fraction, abs_lo, abs_hi)
 
-# Flag: (1) absorbance outside standard curve range, (2) within-plate duplicate CV > 30%
+# Wells reading up to this fraction above the top standard's absorbance are kept (slight
+# extrapolation of the curve); e.g. 0.05 allows absorbance up to 5% above the top standard
+abs_hi_tolerance <- 0.05
+
+# Flag: (1) absorbance below the standard curve range (below detection; kept, concentration
+# clamped to 0), (2) absorbance above the top standard plus tolerance (removed),
+# (3) within-plate duplicate CV > 30% (removed)
 prot_outliers <- prot %>%
-  left_join(std_range, by = "date") %>%
+  left_join(std_range, by = c("date", "fraction")) %>%
   group_by(colony_id, plate) %>%
   mutate(CV = sd(abs562) / mean(abs562) * 100) %>%
   ungroup() %>%
-  mutate(flag_range = abs562 < abs_lo | abs562 > abs_hi,
-         flag_cv    = CV > 30)
+  mutate(flag_low  = abs562 < abs_lo,
+         flag_high = abs562 > abs_hi * (1 + abs_hi_tolerance),
+         flag_cv   = CV > 30)
 
 # Print any flagged samples
 prot_outliers %>%
-  filter(flag_range | flag_cv) %>%
-  select(date, plate, colony_id, well, abs562, prot_ug.mL, CV, flag_range, flag_cv) %>%
+  filter(flag_low | flag_high | flag_cv) %>%
+  select(date, plate, colony_id, well, abs562, prot_ug.mL, CV, flag_low, flag_high, flag_cv) %>%
   arrange(colony_id) %>%
   print(n = Inf)
 
 # Plot absorbance per sample; shape = flagged
 prot_outliers %>%
   ggplot(aes(x = reorder(colony_id, abs562), y = abs562, color = fraction,
-             shape = flag_range | flag_cv)) +
+             shape = flag_low | flag_high | flag_cv)) +
   geom_point(size = 2) +
   geom_hline(aes(yintercept = abs_lo), linetype = "dashed", color = "gray50") +
   geom_hline(aes(yintercept = abs_hi), linetype = "dashed", color = "gray50") +
@@ -278,22 +259,26 @@ high_cv_groups <- prot_outliers %>%
 
 # Full list of removed wells with reason
 removed_samples <- prot_outliers %>%
-  filter(flag_range | flag_cv) %>%
+  filter(flag_high | flag_cv) %>%
   mutate(reason = case_when(
-    flag_range & flag_cv ~ "out of range; high CV",
-    flag_range           ~ "out of range",
-    flag_cv              ~ "high CV (>30%)"
+    flag_high & flag_cv ~ "above top standard + tolerance; high CV",
+    flag_high           ~ "above top standard + tolerance",
+    flag_cv             ~ "high CV (>30%)"
   )) %>%
   select(date, plate, colony_id, well, abs562, prot_ug.mL, CV, reason)
 
 print(removed_samples)
 write_csv(removed_samples, "output/protein_removed_samples.csv")
 
-# Remove out-of-range individual wells and entire high-CV groups
+# Remove wells above the top standard and entire high-CV groups. Wells below the standard
+# curve range are kept: their concentration is clamped to 0 and they are marked
+# below_detection (the curve predicts a negative value there)
 prot <- prot_outliers %>%
-  filter(!flag_range) %>%
+  filter(!flag_high) %>%
   anti_join(high_cv_groups, by = c("colony_id", "plate")) %>%
-  select(-abs_lo, -abs_hi, -CV, -flag_range, -flag_cv)
+  mutate(below_detection = flag_low,
+         prot_ug.mL      = if_else(flag_low, pmax(prot_ug.mL, 0), prot_ug.mL)) %>%
+  select(-abs_lo, -abs_hi, -CV, -flag_low, -flag_high, -flag_cv)
 ```
 
 # Calculate mean of technical duplicates and Normalize to surface area
@@ -302,7 +287,9 @@ prot <- prot_outliers %>%
 # Calculate mean of technical replicates within each plate
 prot.mean <- prot %>% 
   group_by(date, plate, fraction, colony_id, prot_sym_dilution) %>%
-  summarise(prot_ug.mL = mean(prot_ug.mL, na.rm = TRUE), .groups = "drop")
+  summarise(prot_ug.mL       = mean(prot_ug.mL, na.rm = TRUE),
+            below_detection  = any(below_detection),
+            .groups = "drop")
 
 
 # Surface area data
@@ -379,19 +366,34 @@ if (nrow(across_plate_dups) > 0) {
   cat("No across-plate duplicates found.\n")
 }
 
-# Keep one run for each colony_id + fraction combination: the diluted repeat if one
-# exists, otherwise the most recent run (date is YYYYMMDD; plate_num breaks same-day ties)
+# Keep one run for each colony_id + fraction combination: prefer a run that is not below
+# detection, then the diluted repeat if one exists, otherwise the most recent run
+# (date is YYYYMMDD; plate_num breaks same-day ties)
 prot.calc <- prot.calc %>%
-  arrange(desc(diluted_repeat), desc(date), desc(plate_num)) %>%
+  arrange(below_detection, desc(diluted_repeat), desc(date), desc(plate_num)) %>%
   distinct(colony_id, fraction, .keep_all = TRUE)
 
 cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")
 
 # Write protein data to output file
 prot.calc <- prot.calc %>%
-  select(original_id, colony_id, timepoint, site, prot_ug, prot_mg.cm2) %>%
+  select(original_id, colony_id, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
   filter(!is.na(timepoint)) %>%
-  filter(!is.na(prot_mg.cm2))%>%
+  filter(!is.na(prot_mg.cm2))
+
+# Holo = total protein (Host + Sym). Only computed for colonies with both fractions retained,
+# so a missing fraction gives no Holo value rather than a Host- or Sym-only total.
+holo <- prot.calc %>%
+  group_by(original_id, colony_id, timepoint, site) %>%
+  filter(all(c("Host", "Sym") %in% fraction)) %>%
+  summarise(prot_ug         = sum(prot_ug[fraction %in% c("Host", "Sym")]),
+            prot_mg.cm2     = sum(prot_mg.cm2[fraction %in% c("Host", "Sym")]),
+            below_detection = any(below_detection),
+            .groups = "drop") %>%
+  mutate(fraction = "Holo")
+
+prot.calc <- bind_rows(prot.calc, holo) %>%
+  select(original_id, colony_id, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
   write_csv(file = "output/protein_calcs.csv")
 
 ```
@@ -400,14 +402,20 @@ prot.calc <- prot.calc %>%
 #plot by site and timepoint
 ```{r}
 
+dodge <- position_dodge(width = 0.5)
+
 prot.calc |>
   ggplot(aes(x = timepoint, y = prot_mg.cm2, color = site, group = site)) +
-  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
-  stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point") +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
+  geom_point(alpha = 0.3, size = 1,
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.5)) +
+  stat_summary(fun = mean, geom = "line", position = dodge) +
+  stat_summary(fun = mean, geom = "point", position = dodge) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1, position = dodge) +
+  facet_wrap(~factor(fraction, levels = c("Host", "Sym", "Holo"))) +
   labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
   theme_bw()
+
+ggsave("output/protein_by_site_timepoint.pdf", width = 10, height = 5)
 
 
 ```

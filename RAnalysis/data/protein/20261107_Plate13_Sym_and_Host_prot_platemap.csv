@@ -1,0 +1,97 @@
+well,colony_id,prot_sym_dilution,homogenate_vol_available_ul,notes
+A1,StandardA,NA,NA,
+A2,StandardB,NA,NA,
+A3,StandardC,NA,NA,
+A4,StandardD,NA,NA,
+A5,StandardE,NA,NA,
+A6,StandardF,NA,NA,
+A7,StandardG,NA,NA,
+A8,StandardH,NA,NA,
+A9,StandardI,NA,NA,
+A10,JC_42_05_T0,NA,NA,sym
+A11,LS_31_05_T0,NA,NA,sym
+A12,JC_43_02_T1,NA,NA,sym
+B1,StandardA,NA,NA,
+B2,StandardB,NA,NA,
+B3,StandardC,NA,NA,
+B4,StandardD,NA,NA,
+B5,StandardE,NA,NA,
+B6,StandardF,NA,NA,
+B7,StandardG,NA,NA,
+B8,StandardH,NA,NA,
+B9,StandardI,NA,NA,
+B10,JC_42_05_T0,NA,NA,sym
+B11,LS_31_05_T0,NA,NA,sym
+B12,JC_43_02_T1,NA,NA,sym
+C1,LS_32_02_T1,NA,NA,sym
+C2,LS_35_03_T2,NA,NA,sym
+C3,JC_44_01_T4,NA,NA,sym
+C4,BLANK,NA,NA,
+C5,JC_42_05_T0,NA,NA,host
+C6,LS_31_05_T0,NA,NA,host
+C7,JC_43_02_T1,NA,NA,host
+C8,LS_32_02_T1,NA,NA,host
+C9,LS_35_03_T2,NA,NA,host
+C10,JC_44_01_T4,NA,NA,host
+C11,NA,NA,NA,
+C12,NA,NA,NA,
+D1,LS_32_02_T1,NA,NA,sym
+D2,LS_35_03_T2,NA,NA,sym
+D3,JC_44_01_T4,NA,NA,sym
+D4,BLANK,NA,NA,
+D5,JC_42_05_T0,NA,NA,host
+D6,LS_31_05_T0,NA,NA,host
+D7,JC_43_02_T1,NA,NA,host
+D8,LS_32_02_T1,NA,NA,host
+D9,LS_35_03_T2,NA,NA,host
+D10,JC_44_01_T4,NA,NA,host
+D11,NA,NA,NA,
+D12,NA,NA,NA,
+E1,LS_35_05_T0,1000,NA,sym re-run
+E2,LS_35_01_T4,1000,300,sym re-run
+E3,SE_21_05_T4,1000,500,sym re-run
+E4,JC_40_03_T4,1000,NA,sym re-run
+E5,JC_40_02_T4,1000,NA,sym re-run
+E6,JC_40_02_T2,500,NA,sym re-run
+E7,LS_32_02_T0,1000,NA,sym re-run
+E8,NA,NA,NA,
+E9,NA,NA,NA,
+E10,NA,NA,NA,
+E11,NA,NA,NA,
+E12,NA,NA,NA,
+F1,LS_35_05_T0,1000,NA,sym re-run
+F2,LS_35_01_T4,1000,300,sym re-run
+F3,SE_21_05_T4,1000,500,sym re-run
+F4,JC_40_03_T4,1000,NA,sym re-run
+F5,JC_40_02_T4,1000,NA,sym re-run
+F6,JC_40_02_T2,500,NA,sym re-run
+F7,LS_32_02_T0,1000,NA,sym re-run
+F8,NA,NA,NA,
+F9,NA,NA,NA,
+F10,NA,NA,NA,
+F11,NA,NA,NA,
+F12,NA,NA,NA,
+G1,NA,NA,NA,
+G2,NA,NA,NA,
+G3,NA,NA,NA,
+G4,NA,NA,NA,
+G5,NA,NA,NA,
+G6,NA,NA,NA,
+G7,NA,NA,NA,
+G8,NA,NA,NA,
+G9,NA,NA,NA,
+G10,NA,NA,NA,
+G11,NA,NA,NA,
+G12,NA,NA,NA,
+H1,NA,NA,NA,
+H2,NA,NA,NA,
+H3,NA,NA,NA,
+H4,NA,NA,NA,
+H5,NA,NA,NA,
+H6,NA,NA,NA,
+H7,NA,NA,NA,
+H8,NA,NA,NA,
+H9,NA,NA,NA,
+H10,NA,NA,NA,
+H11,NA,NA,NA,
+H12,NA,NA,NA,

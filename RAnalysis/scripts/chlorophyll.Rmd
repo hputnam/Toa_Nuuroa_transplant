@@ -5,6 +5,7 @@ editor_options:
   chunk_output_type: console
 ---
 
+#load libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
@@ -15,6 +16,9 @@ if (!require("plotrix")) install.packages("plotrix")
 # load packages
 library(plotrix)
 library(tidyverse)
+library(patchwork)
+library(grid)
+library(gtable)
 
 ```
 
@@ -56,13 +60,12 @@ df <- df %>%
   summarise(n = n(), mean_abs = mean(absorbance)) %>%
   spread(wavelength, mean_abs)
 
-# get the acetone blank 750 absorbance for each file (i.e., plate), and subtract from 630 and 663 values for each sample
+# subtract each sample's own 750 nm absorbance (turbidity/scatter correction) from its 630 and 663 values
+# (the BLANK row is corrected the same way and removed later)
 df <- df %>%
-  group_by(file) %>%
-  mutate(blank750 = `750`[colony_id == "BLANK"]) %>%
   ungroup() %>%
-  mutate(adj630 = `630` - blank750,
-         adj663 = `663` - blank750)
+  mutate(adj630 = `630` - `750`,
+         adj663 = `663` - `750`)
 
 # calculate chla and chlc2 values based on equations from Jeffrey and Humphrey 1975
 # units µg/ml
@@ -117,10 +120,23 @@ homog_vols <- read.csv("data/homogenate_vols.csv")
 metadata <- read.csv("data/sample_info_colony_id.csv") 
 
 # Join homogenate volumes and surface area with sample metadata
-metadata <- full_join(metadata, homog_vols) %>%
-  full_join(sa)
+# Join on original_id only: date_airbrush formats differ between files (11/1/2024 vs 11/1/24)
+metadata <- metadata %>%
+  left_join(select(homog_vols, original_id, homog_vol_ml), by = "original_id") %>%
+  left_join(sa, by = c("original_id", "colony_id"))
 
-# Join prot data with metadata
+# Some T0 plate map entries (plates 3 and 4) use the original_id format;
+# translate them to the standard colony_id so they match the metadata
+id_lookup <- metadata %>%
+  distinct(original_id, colony_id) %>%
+  rename(colony_id_std = colony_id)
+
+chl.mean <- chl.mean %>%
+  left_join(id_lookup, by = c("colony_id" = "original_id")) %>%
+  mutate(colony_id = coalesce(colony_id_std, colony_id)) %>%
+  select(-colony_id_std)
+
+# Join chl data with metadata
 chl.calc <- left_join(chl.mean, metadata, by="colony_id") 
 
 # Extraction volumes — 0.5 mL homogenate subsampled and extracted into 1.0 mL acetone
@@ -136,6 +152,38 @@ chl <- chl.calc %>%
 
 # remove blanks and NAs
 chl <- filter(chl, !colony_id %in% c("NA", "BLANK"))
+```
+
+# Check plate map sample IDs against metadata
+```{r}
+# Re-read plate maps (df has been summarised above) and keep occupied wells
+pm_all <- tibble(file = chl_platemaps) %>%
+  mutate(pm = map(file, ~ read_csv(paste0(chl_path, .x), show_col_types = FALSE))) %>%
+  unnest(pm) %>%
+  filter(!is.na(colony_id))
+
+# Translate original_id-format entries using id_lookup (defined above)
+pm_all <- pm_all %>%
+  left_join(id_lookup, by = c("colony_id" = "original_id")) %>%
+  mutate(id_std = coalesce(colony_id_std, colony_id))
+
+# Plate map IDs with no match in metadata (excluding blanks): likely typos
+pm_unmatched <- pm_all %>%
+  filter(id_std != "BLANK", !id_std %in% metadata$colony_id) %>%
+  distinct(file, well, colony_id)
+pm_unmatched
+
+# Metadata samples that do not appear on any plate map
+missing_meta <- metadata %>%
+  filter(!colony_id %in% pm_all$id_std) %>%
+  select(colony_id, original_id, site, coral, timepoint, rep)
+
+cat(nrow(missing_meta), "of", n_distinct(metadata$colony_id),
+    "metadata samples are missing from the plate maps\n")
+missing_meta %>% count(site, timepoint)
+
+write_csv(missing_meta, "output/missing_chl_from_platemaps.csv")
+missing_meta
 ```
 
 
@@ -173,9 +221,17 @@ if (nrow(across_plate_dups) > 0) {
 ```
 
 ```{r}
+# Negative values are below detection: flag them, then set to 0
+chl <- chl %>%
+  mutate(chla.below.detection  = chla.ug.cm2  < 0,
+         chlc2.below.detection = chlc2.ug.cm2 < 0,
+         chla.ug.cm2  = if_else(chla.below.detection,  0, chla.ug.cm2),
+         chlc2.ug.cm2 = if_else(chlc2.below.detection, 0, chlc2.ug.cm2))
+
 # write chlorophyll data to file
 chl <- chl %>%
-  select(original_id, colony_id, timepoint, site, chla.ug.cm2, chlc2.ug.cm2) %>%
+  select(original_id, colony_id, timepoint, site, chla.ug.cm2, chlc2.ug.cm2,
+         chla.below.detection, chlc2.below.detection) %>%
   filter(!is.na(timepoint)) %>%
   filter(!is.na(chla.ug.cm2))%>%
   filter(!is.na(chlc2.ug.cm2))%>%
@@ -184,25 +240,63 @@ chl <- chl %>%
 
 #plot by site and timepoint
 ```{r}
-chl |>
-  ggplot(aes(x = timepoint, y = chla.ug.cm2, color = site, group = site)) +
-  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
-  stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point", size = 2) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
-  labs(x = "Timepoint", y = expression("Chl-a (µg cm"^-2*")"), color = "Site") +
-  theme_bw()
 
+dodge <- position_dodge(width = 0.5)
 
-chl |>
-  ggplot(aes(x = timepoint, y = chlc2.ug.cm2, color = site, group = site)) +
-  geom_jitter(alpha = 0.3, width = 0.1, size = 1) +
-  stat_summary(fun = mean, geom = "line") +
-  stat_summary(fun = mean, geom = "point", size = 2) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1) +
-  labs(x = "Timepoint", y = expression("Chlc2 (µg cm"^-2*")"), color = "Site") +
-  theme_bw()
+plot_chl <- function(data, yvar, ylab) {
+  ggplot(data, aes(x = timepoint, y = .data[[yvar]], color = site, group = site)) +
+    geom_point(alpha = 0.3, size = 1,
+               position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.5)) +
+    stat_summary(fun = mean, geom = "line", position = dodge) +
+    stat_summary(fun = mean, geom = "point", position = dodge) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1, position = dodge) +
+    labs(x = "Timepoint", y = ylab, color = "Site") +
+    theme_bw()
+}
 
+chla_plot  <- plot_chl(chl, "chla.ug.cm2",  expression("Chl-a (µg cm"^-2*")"))
+chlc2_plot <- plot_chl(chl, "chlc2.ug.cm2", expression("Chl-c2 (µg cm"^-2*")"))
+
+chl_combined <- chla_plot + chlc2_plot +
+  plot_layout(guides = "collect")
+
+chl_combined
+
+# Draw a shaded zoom region between the panels: dashed lines run from the right edge of
+# panel A, at the heights of panel B's y-axis max and min on A's scale, to the top-left
+# and bottom-left corners of panel B (shows the axis-limit difference)
+
+add_axis_connector <- function(combined, plot_a, plot_b, col = "grey30") {
+  g <- patchwork::patchworkGrob(combined)
+  ra <- ggplot_build(plot_a)$layout$panel_params[[1]]$y.range
+  rb <- ggplot_build(plot_b)$layout$panel_params[[1]]$y.range
+
+  pan <- g$layout[grepl("^panel-[0-9]+$", g$layout$name), ]
+  pan <- pan[order(pan$l), ]
+  pa <- pan[1, ]; pb <- pan[2, ]
+
+  # Heights within panel A (npc) of the values at the top and bottom of panel B's y axis
+  y_top    <- (rb[2] - ra[1]) / diff(ra)
+  y_bottom <- (rb[1] - ra[1]) / diff(ra)
+
+  zoom <- grobTree(
+    polygonGrob(x = c(0, 1, 1, 0), y = c(y_top, 1, 0, y_bottom),
+                gp = gpar(fill = col, alpha = 0.12, col = NA)),
+    segmentsGrob(x0 = 0, x1 = 1, y0 = c(y_top, y_bottom), y1 = c(1, 0),
+                 gp = gpar(col = col, lty = 2, lwd = 1))
+  )
+  # Span only the columns between the two panels
+  gtable_add_grob(g, zoom, t = pa$t, b = pa$b, l = pa$r + 1, r = pb$l - 1,
+                  z = Inf, clip = "off", name = "axis-connector")
+}
+
+chl_connected <- add_axis_connector(chl_combined, chla_plot, chlc2_plot)
+grid.newpage(); grid.draw(chl_connected)
+
+# Save both panels to a single PDF
+pdf("output/chlorophyll_chla_chlc2.pdf", width = 10, height = 4.5)
+grid.draw(chl_connected)
+dev.off()
 
 
 ```

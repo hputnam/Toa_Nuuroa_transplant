@@ -122,5 +122,5 @@ if (nrow(dupes) > 0) {
 
 ```{r write}
 write_csv(sample_info, "data/sample_info_colony_id.csv")
-cat("Saved", nrow(sample_info), "rows to data/sample_info_colony_id.csv\n")
+cat("Saved", nrow(sample_info), "rows to data/changed_sample_info_colony_id.csv\n")
 ```

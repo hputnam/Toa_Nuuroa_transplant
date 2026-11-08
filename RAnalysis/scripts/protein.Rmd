@@ -302,9 +302,11 @@ homog_vols <- read.csv("data/homogenate_vols.csv") %>%
 # Coral sample metadata
 metadata <- read.csv("data/sample_info_colony_id.csv") 
 
-# Join homogenate volumes and surface area with sample metadata
-metadata <- full_join(metadata, homog_vols) %>%
-  full_join(sa)
+# Join homogenate volumes and surface area with sample metadata. Join homogenate volumes by
+# original_id only: date_airbrush is formatted differently (11/1/2024 vs 11/1/24), so an
+# implicit join on all shared columns matches nothing and duplicates every row.
+metadata <- full_join(metadata, select(homog_vols, original_id, homog_vol_ml), by = "original_id") %>%
+  full_join(sa, by = c("original_id", "colony_id"))
 
 # Dilution protocol: the aliquot was 500 uL; 50 uL (2 x 25 uL) was removed for the first
 # assay, leaving 450 uL. prot_sym_dilution uL of PBS was then added to the remaining volume.

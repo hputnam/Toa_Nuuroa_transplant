@@ -300,7 +300,8 @@ homog_vols <- read.csv("data/homogenate_vols.csv") %>%
   select(-any_of("prot_sym_dilution"))
 
 # Coral sample metadata
-metadata <- read.csv("data/sample_info_colony_id.csv") 
+metadata <- read.csv("data/sample_info_colony_id.csv") %>%
+  mutate(species = factor(species))
 
 # Join homogenate volumes and surface area with sample metadata. Join homogenate volumes by
 # original_id only: date_airbrush is formatted differently (11/1/2024 vs 11/1/24), so an
@@ -379,14 +380,17 @@ cat("Retained", nrow(prot.calc), "unique samples after deduplication.\n")
 
 # Write protein data to output file
 prot.calc <- prot.calc %>%
-  select(original_id, colony_id, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
+  select(original_id, colony_id, species, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
   filter(!is.na(timepoint)) %>%
   filter(!is.na(prot_mg.cm2))
+
+# Every retained sample should have a species
+stopifnot(!anyNA(prot.calc$species))
 
 # Holo = total protein (Host + Sym). Only computed for colonies with both fractions retained,
 # so a missing fraction gives no Holo value rather than a Host- or Sym-only total.
 holo <- prot.calc %>%
-  group_by(original_id, colony_id, timepoint, site) %>%
+  group_by(original_id, colony_id, species, timepoint, site) %>%
   filter(all(c("Host", "Sym") %in% fraction)) %>%
   summarise(prot_ug         = sum(prot_ug[fraction %in% c("Host", "Sym")]),
             prot_mg.cm2     = sum(prot_mg.cm2[fraction %in% c("Host", "Sym")]),
@@ -395,17 +399,30 @@ holo <- prot.calc %>%
   mutate(fraction = "Holo")
 
 prot.calc <- bind_rows(prot.calc, holo) %>%
-  select(original_id, colony_id, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
+  mutate(fraction = factor(fraction, levels = c("Host", "Sym", "Holo"))) %>%
+  select(original_id, colony_id, species, fraction, timepoint, site, prot_ug, prot_mg.cm2, below_detection) %>%
   write_csv(file = "output/protein_calcs.csv")
+
+# Summary by species, fraction, site and timepoint
+prot_summary <- prot.calc %>%
+  group_by(species, fraction, site, timepoint) %>%
+  summarise(n = n(),
+            prot_mean = mean(prot_mg.cm2),
+            prot_se   = plotrix::std.error(prot_mg.cm2),
+            .groups = "drop")
+
+write_csv(prot_summary, "output/protein_summary_by_species.csv")
+prot_summary
 
 ```
 
 
-#plot by site and timepoint
+#plot by species, site and timepoint
 ```{r}
 
 dodge <- position_dodge(width = 0.5)
 
+# Rows = species, columns = fraction
 prot.calc |>
   ggplot(aes(x = timepoint, y = prot_mg.cm2, color = site, group = site)) +
   geom_point(alpha = 0.3, size = 1,
@@ -413,13 +430,117 @@ prot.calc |>
   stat_summary(fun = mean, geom = "line", position = dodge) +
   stat_summary(fun = mean, geom = "point", position = dodge) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1, position = dodge) +
-  facet_wrap(~factor(fraction, levels = c("Host", "Sym", "Holo"))) +
+  facet_grid(species ~ fraction) +
   labs(x = "Timepoint", y = expression("Protein (mg cm"^-2*")"), color = "Site") +
-  theme_bw()
+  theme_bw() +
+  theme(strip.text.y = element_text(face = "italic"))
 
-ggsave("output/protein_by_site_timepoint.pdf", width = 10, height = 5)
+ggsave("output/protein_by_site_timepoint.pdf", width = 10, height = 7)
 
 
+```
+
+# Mixed models: species x site x timepoint, colony as random intercept
+
+One model per fraction (Host, Sym, Holo). Colony = site + coral number (18 colonies, 3 per species x site). Fragments from a colony were sampled destructively at each timepoint, so colony enters as a random intercept. `prot.calc` already holds one value per colony_id and fraction (deduplicated above).
+
+Points to keep in mind:
+
+- Three Pocillopora cells have no data (LS at T4 and T5, SE at T5), so some three-way interaction terms are aliased and dropped by the fitting function. Interpret Type III tests of higher-order terms with care.
+- Species and site are only replicated at the colony level (3 colonies per species x site), so those tests have little power.
+- Holo is the sum of Host and Sym for the same fragments, so the three models are not independent and their p-values should not be treated as three separate lines of evidence.
+- Wells below the standard curve were clamped to 0 (5 Host values), which is one reason for using a family that allows exact zeros.
+
+```{r prot-models}
+library(glmmTMB)
+library(DHARMa)
+library(car)
+
+prot_mod <- prot.calc %>%
+  ungroup() %>%
+  mutate(colony    = factor(paste(site, str_extract(colony_id, "(?<=_)[0-9]+(?=_)"), sep = "_")),
+         site      = factor(site),
+         timepoint = factor(timepoint))
+
+# Sum contrasts so Type III Wald tests are interpretable
+sum_contrasts <- list(species = "contr.sum", site = "contr.sum", timepoint = "contr.sum")
+
+# Tweedie (log link): handles the exact zeros in Host and the right skew and mean-variance
+# relationship in all fractions, so one family is used throughout. Raw, sqrt and log Gaussian
+# models and Gamma were compared with DHARMa residuals; with constant variance the Gaussian
+# models showed unequal residual spread across timepoints (variance is largest at T0), so
+# dispersion varies by timepoint.
+fractions <- levels(prot_mod$fraction)
+
+# do.call puts the data frame itself in the model call, so update() and DHARMa can re-evaluate it
+prot_models <- map(set_names(fractions), function(fr) {
+  do.call(glmmTMB,
+          list(formula     = prot_mg.cm2 ~ species * site * timepoint + (1 | colony),
+               dispformula = ~ timepoint,
+               data        = filter(prot_mod, fraction == fr),
+               family      = tweedie(link = "log"),
+               contrasts   = sum_contrasts))
+})
+
+# Does timepoint-specific dispersion help? (lower AIC is better)
+map_dfr(prot_models, ~ tibble(AIC_dispersion_by_timepoint = AIC(.x),
+                              AIC_constant_dispersion     = AIC(update(.x, dispformula = ~ 1))),
+        .id = "fraction") %>%
+  mutate(delta_AIC = AIC_constant_dispersion - AIC_dispersion_by_timepoint)
+```
+
+## Assumption checks
+
+Simulation-based (DHARMa) residuals. The Levene test checks equal residual spread across timepoints.
+
+```{r prot-diagnostics}
+set.seed(3917)
+prot_sims <- map(prot_models, simulateResiduals, n = 1000)
+
+# Convergence (positive-definite Hessian)
+map_lgl(prot_models, ~ .x$sdr$pdHess)
+
+diag_tests <- function(sim, model, fraction) {
+  tibble(fraction = fraction,
+         test = c("Uniformity (KS)", "Dispersion", "Outliers", "Equal variance by timepoint (Levene)"),
+         p = c(testUniformity(sim, plot = FALSE)$p.value,
+               testDispersion(sim, plot = FALSE)$p.value,
+               testOutliers(sim,   plot = FALSE)$p.value,
+               leveneTest(residuals(sim), model.frame(model)$timepoint)$`Pr(>F)`[1]))
+}
+
+pmap_dfr(list(prot_sims, prot_models, fractions), diag_tests)
+
+walk2(prot_sims, fractions, ~ plot(.x, title = paste("Protein:", .y)))
+
+# Normality of colony random effects (log scale)
+op <- par(mfrow = c(1, 3))
+walk2(prot_models, fractions, function(m, fr) {
+  re <- ranef(m)$cond$colony[[1]]
+  qqnorm(re, main = paste(fr, "colony random effects")); qqline(re)
+})
+par(op)
+```
+
+## Results
+
+```{r prot-results}
+# Type III Wald chi-square tests (singular.ok because of the empty cells)
+prot_anova <- map_dfr(prot_models, function(m) {
+  as.data.frame(Anova(m, type = 3, singular.ok = TRUE)) %>% rownames_to_column("term")
+}, .id = "fraction") %>%
+  rename(p.value = `Pr(>Chisq)`)
+
+write_csv(prot_anova, "output/protein_model_anova.csv")
+
+prot_anova %>%
+  filter(term != "(Intercept)") %>%
+  mutate(p.value = signif(p.value, 3)) %>%
+  select(fraction, term, Chisq, Df, p.value) %>%
+  pivot_wider(names_from = fraction, values_from = c(Chisq, p.value), names_vary = "slowest")
+
+# Colony random-effect variance (log scale)
+map(prot_models, VarCorr)
 ```
 
 

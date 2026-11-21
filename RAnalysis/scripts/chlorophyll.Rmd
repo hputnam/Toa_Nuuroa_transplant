@@ -117,7 +117,8 @@ sa <- read.csv("output/surface_area_calculated.csv")
 homog_vols <- read.csv("data/homogenate_vols.csv") 
 
 # Coral sample metadata
-metadata <- read.csv("data/sample_info_colony_id.csv") 
+metadata <- read.csv("data/sample_info_colony_id.csv") %>%
+  mutate(species = factor(species))
 
 # Join homogenate volumes and surface area with sample metadata
 # Join on original_id only: date_airbrush formats differ between files (11/1/2024 vs 11/1/24)
@@ -230,7 +231,7 @@ chl <- chl %>%
 
 # write chlorophyll data to file
 chl <- chl %>%
-  select(original_id, colony_id, timepoint, site, chla.ug.cm2, chlc2.ug.cm2,
+  select(original_id, colony_id, species, timepoint, site, chla.ug.cm2, chlc2.ug.cm2,
          chla.below.detection, chlc2.below.detection) %>%
   filter(!is.na(timepoint)) %>%
   filter(!is.na(chla.ug.cm2))%>%
@@ -238,7 +239,23 @@ chl <- chl %>%
   write_csv(path = "output/chlorophyll.csv")
 ```
 
-#plot by site and timepoint
+# Summary by species, site and timepoint
+```{r}
+# every sample should have a species
+stopifnot(!anyNA(chl$species))
+
+chl_summary <- chl %>%
+  group_by(species, site, timepoint) %>%
+  summarise(n = n(),
+            chla_mean = mean(chla.ug.cm2),  chla_se  = plotrix::std.error(chla.ug.cm2),
+            chlc2_mean = mean(chlc2.ug.cm2), chlc2_se = plotrix::std.error(chlc2.ug.cm2),
+            .groups = "drop")
+
+write_csv(chl_summary, "output/chlorophyll_summary_by_species.csv")
+chl_summary
+```
+
+#plot by species, site and timepoint
 ```{r}
 
 dodge <- position_dodge(width = 0.5)
@@ -254,13 +271,21 @@ plot_chl <- function(data, yvar, ylab) {
     theme_bw()
 }
 
-chla_plot  <- plot_chl(chl, "chla.ug.cm2",  expression("Chl-a (µg cm"^-2*")"))
-chlc2_plot <- plot_chl(chl, "chlc2.ug.cm2", expression("Chl-c2 (µg cm"^-2*")"))
+# Build the Chl-a / Chl-c2 panel pair for one species
+make_species_plots <- function(sp) {
+  d <- filter(chl, species == sp)
+  chla_plot  <- plot_chl(d, "chla.ug.cm2",  expression("Chl-a (µg cm"^-2*")"))
+  chlc2_plot <- plot_chl(d, "chlc2.ug.cm2", expression("Chl-c2 (µg cm"^-2*")"))
+  combined <- chla_plot + chlc2_plot +
+    plot_layout(guides = "collect") +
+    plot_annotation(title = sp, theme = theme(plot.title = element_text(face = "italic")))
+  list(chla = chla_plot, chlc2 = chlc2_plot, combined = combined)
+}
 
-chl_combined <- chla_plot + chlc2_plot +
-  plot_layout(guides = "collect")
+species_plots <- map(set_names(levels(chl$species)), make_species_plots)
 
-chl_combined
+# Quick look without the connector
+map(species_plots, "combined")
 
 # Draw a shaded zoom region between the panels: dashed lines run from the right edge of
 # panel A, at the heights of panel B's y-axis max and min on A's scale, to the top-left
@@ -290,14 +315,109 @@ add_axis_connector <- function(combined, plot_a, plot_b, col = "grey30") {
                   z = Inf, clip = "off", name = "axis-connector")
 }
 
-chl_connected <- add_axis_connector(chl_combined, chla_plot, chlc2_plot)
-grid.newpage(); grid.draw(chl_connected)
+chl_connected <- map(species_plots, ~ add_axis_connector(.x$combined, .x$chla, .x$chlc2))
 
-# Save both panels to a single PDF
+# Save both panels for each species to a single PDF (one page per species)
 pdf("output/chlorophyll_chla_chlc2.pdf", width = 10, height = 4.5)
-grid.draw(chl_connected)
+walk(chl_connected, ~ { grid.newpage(); grid.draw(.x) })
 dev.off()
 
+# Display in the notebook
+walk(chl_connected, ~ { grid.newpage(); grid.draw(.x) })
 
+
+```
+
+# Mixed models: species x site x timepoint, colony as random intercept
+
+Colony = site + coral number (18 colonies, 3 per species x site). Fragments from a colony were sampled destructively at each timepoint, so colony enters as a random intercept. Colony IDs run on more than one plate are averaged first so each fragment appears once.
+
+Two design points affect interpretation:
+
+- Three species x site x timepoint cells are empty (Pocillopora at LS T4/T5 and SE T5), so some three-way interaction terms are aliased and dropped by the fitting functions. Type III tests of the higher-order terms should be read with that in mind.
+- Site and species are only replicated at the colony level (3 colonies per species x site), so those tests have little power.
+
+```{r models}
+library(glmmTMB)
+library(DHARMa)
+library(car)
+
+chl_mod <- chl %>%
+  mutate(colony    = factor(paste(site, str_extract(colony_id, "(?<=_)[0-9]+(?=_)"), sep = "_")),
+         site      = factor(site),
+         timepoint = factor(timepoint)) %>%
+  group_by(colony_id, colony, species, site, timepoint) %>%
+  summarise(across(c(chla.ug.cm2, chlc2.ug.cm2), mean), .groups = "drop")
+
+# Empty cells in the design
+chl_mod %>%
+  count(species, site, timepoint) %>%
+  complete(species, site, timepoint, fill = list(n = 0)) %>%
+  filter(n == 0)
+
+# Sum contrasts so Type III Wald tests are interpretable
+sum_contrasts <- list(species = "contr.sum", site = "contr.sum", timepoint = "contr.sum")
+
+# Chl-a: no zeros. Residuals on the raw and log scales were skewed / heteroscedastic;
+# the square-root scale gave acceptable residuals, so fit a Gaussian model on sqrt(chl-a).
+# Residual variance differed across timepoints (larger at T0), so dispersion varies by timepoint
+# (AIC improved by ~38 over a constant-variance model).
+chl_mod <- chl_mod %>% mutate(sqrt_chla = sqrt(chla.ug.cm2))
+
+m_chla <- glmmTMB(sqrt_chla ~ species * site * timepoint + (1 | colony),
+                  dispformula = ~ timepoint,
+                  data = chl_mod, family = gaussian, contrasts = sum_contrasts)
+
+# Chl-c2: 6 exact zeros (below detection) and right-skewed, so Gamma/log are not possible.
+# Tweedie (log link) handles zeros and skew and gave better simulated residuals than a
+# sqrt Gaussian model. Dispersion also varies by timepoint (AIC improved by ~44).
+m_chlc2 <- glmmTMB(chlc2.ug.cm2 ~ species * site * timepoint + (1 | colony),
+                   dispformula = ~ timepoint,
+                   data = chl_mod, family = tweedie(link = "log"), contrasts = sum_contrasts)
+```
+
+## Assumption checks
+
+Simulation-based (DHARMa) residuals are used for both models so they are comparable.
+
+```{r model-diagnostics}
+set.seed(8821)
+sim_chla  <- simulateResiduals(m_chla,  n = 1000)
+sim_chlc2 <- simulateResiduals(m_chlc2, n = 1000)
+
+# Convergence (positive-definite Hessian)
+c(chla = m_chla$sdr$pdHess, chlc2 = m_chlc2$sdr$pdHess)
+
+# Uniformity, dispersion, outliers, and equal variance across timepoints
+diag_tests <- function(sim, response) {
+  tibble(response = response,
+         test = c("Uniformity (KS)", "Dispersion", "Outliers", "Equal variance by timepoint (Levene)"),
+         p = c(testUniformity(sim, plot = FALSE)$p.value,
+               testDispersion(sim, plot = FALSE)$p.value,
+               testOutliers(sim,   plot = FALSE)$p.value,
+               leveneTest(residuals(sim), chl_mod$timepoint)$`Pr(>F)`[1]))
+}
+bind_rows(diag_tests(sim_chla, "Chl-a"), diag_tests(sim_chlc2, "Chl-c2"))
+
+plot(sim_chla)
+plot(sim_chlc2)
+
+# Normality of colony random effects
+re_chla <- ranef(m_chla)$cond$colony[[1]]
+qqnorm(re_chla, main = "Chl-a colony random effects"); qqline(re_chla)
+```
+
+Chl-a passes all four checks. Chl-c2 is borderline on dispersion and outliers (a few high values remain), so its p-values should be read as approximate.
+
+## Results
+
+```{r model-results}
+# Type III Wald chi-square tests (singular.ok because of the empty cells)
+Anova(m_chla,  type = 3, singular.ok = TRUE)
+Anova(m_chlc2, type = 3, singular.ok = TRUE)
+
+# Colony random-effect variance
+VarCorr(m_chla)
+VarCorr(m_chlc2)
 ```
 
